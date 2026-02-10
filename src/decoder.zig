@@ -190,7 +190,7 @@ pub const Decoder = struct {
                         inst.mnemonic = .JMP;
                     }
                     inst.dst = decodeEA(ea_mode, ea_reg);
-                } else if ((opcode & 0xFF00) == 0x4000) {
+                } else if ((opcode & 0xFF00) == 0x4000 or (opcode & 0xFF00) == 0x4200 or (opcode & 0xFF00) == 0x4400 or (opcode & 0xFF00) == 0x4600) {
                     // NEGX, CLR, NEG, NOT
                     const subop = (opcode >> 9) & 0x7;
                     inst.mnemonic = switch (subop) {
@@ -200,17 +200,39 @@ pub const Decoder = struct {
                         3 => .NOT,
                         else => .UNKNOWN,
                     };
+                    const ea_mode = (opcode >> 3) & 0x7;
+                    const ea_reg = opcode & 0x7;
+                    inst.dst = decodeEA(ea_mode, @truncate(ea_reg));
+                    const size_bits = (opcode >> 6) & 0x3;
+                    inst.data_size = switch (size_bits) {
+                        0 => .Byte,
+                        1 => .Word,
+                        2 => .Long,
+                        else => .Long,
+                    };
                 } else if ((opcode & 0xFF00) == 0x4A00) {
                     // TST
                     inst.mnemonic = .TST;
+                    const ea_mode = (opcode >> 3) & 0x7;
+                    const ea_reg = opcode & 0x7;
+                    inst.dst = decodeEA(ea_mode, @truncate(ea_reg));
+                    const size_bits = (opcode >> 6) & 0x3;
+                    inst.data_size = switch (size_bits) {
+                        0 => .Byte,
+                        1 => .Word,
+                        2 => .Long,
+                        else => .Long,
+                    };
                 } else if ((opcode & 0xFFC0) == 0x4840) {
                     // SWAP
                     inst.mnemonic = .SWAP;
                     inst.dst = .{ .DataReg = @truncate(opcode & 0x7) };
-                } else if ((opcode & 0xFFC0) == 0x4880) {
-                    // EXT
+                } else if ((opcode & 0xFFC0) == 0x4880 or (opcode & 0xFFC0) == 0x48C0) {
+                    // EXT.W or EXT.L
                     inst.mnemonic = .EXT;
                     inst.dst = .{ .DataReg = @truncate(opcode & 0x7) };
+                    // Bit 6 determines size: 0=word (byte->word), 1=long (word->long)
+                    inst.data_size = if ((opcode & 0x40) != 0) .Long else .Word;
                 } else {
                     inst.mnemonic = .UNKNOWN;
                 }
