@@ -48,6 +48,15 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     b.installArtifact(bits_test);
+    
+    // Stack operations test executable
+    const stack_test = b.addExecutable(.{
+        .name = "m68020-emu-test-stack",
+        .root_source_file = b.path("src/test_stack.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    b.installArtifact(stack_test);
 
     // Run step
     const run_cmd = b.addRunArtifact(exe);
@@ -69,6 +78,12 @@ pub fn build(b: *std.Build) void {
     run_bits.step.dependOn(b.getInstallStep());
     const run_bits_step = b.step("test-bits", "Run bit operation tests");
     run_bits_step.dependOn(&run_bits.step);
+    
+    // Run stack test step
+    const run_stack = b.addRunArtifact(stack_test);
+    run_stack.step.dependOn(b.getInstallStep());
+    const run_stack_step = b.step("test-stack", "Run stack operation tests");
+    run_stack_step.dependOn(&run_stack.step);
 
     // Unit tests
     const lib_unit_tests = b.addTest(.{

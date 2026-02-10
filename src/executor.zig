@@ -77,6 +77,11 @@ pub const Executor = struct {
             .BCLR => return try executeBclr(m68k, inst),
             .BCHG => return try executeBchg(m68k, inst),
             
+            .LINK => return try executeLink(m68k, inst),
+            .UNLK => return try executeUnlk(m68k, inst),
+            .PEA => return try executePea(m68k, inst),
+            .MOVEM => return try executeMovem(m68k, inst),
+            
             .ILLEGAL => return error.IllegalInstruction,
             else => {
                 m68k.pc += 2;
@@ -1221,6 +1226,192 @@ fn getBitNumber(m68k: *cpu.M68k, src: decoder.Operand, dst: decoder.Operand) !u3
         .DataReg => bit_num_raw & 31,
         else => bit_num_raw & 7,
     };
+}
+
+// ============================================================================
+// Stack operations
+// ============================================================================
+
+fn executeLink(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    const reg = switch (inst.dst) {
+        .AddrReg => |r| r,
+        else => return error.InvalidOperand,
+    };
+    
+    // Read displacement from extension word
+    const displacement_word = try m68k.memory.read16(m68k.pc + 2);
+    const displacement: i16 = @bitCast(displacement_word);
+    
+    // Push An onto stack
+    m68k.a[7] -= 4;
+    try m68k.memory.write32(m68k.a[7], m68k.a[reg]);
+    
+    // An = SP
+    m68k.a[reg] = m68k.a[7];
+    
+    // SP = SP + displacement
+    m68k.a[7] = @intCast(@as(i32, @intCast(m68k.a[7])) + @as(i32, displacement));
+    
+    m68k.pc += 4; // opcode + extension word
+    return 16;
+}
+
+fn executeUnlk(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    const reg = switch (inst.dst) {
+        .AddrReg => |r| r,
+        else => return error.InvalidOperand,
+    };
+    
+    // SP = An
+    m68k.a[7] = m68k.a[reg];
+    
+    // Pop An from stack
+    m68k.a[reg] = try m68k.memory.read32(m68k.a[7]);
+    m68k.a[7] += 4;
+    
+    m68k.pc += 2;
+    return 12;
+}
+
+fn executePea(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // Calculate effective address
+    const ea = try calculateEA(m68k, inst.src);
+    
+    // Push EA onto stack
+    m68k.a[7] -= 4;
+    try m68k.memory.write32(m68k.a[7], ea);
+    
+    m68k.pc += 2;
+    return 12;
+}
+
+fn executeMovem(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // Read register mask from extension word
+    const mask = try m68k.memory.read16(m68k.pc + 2);
+    
+    // Determine direction from opcode
+    const direction = (inst.opcode >> 10) & 1;
+    
+    if (direction == 0) {
+        // Registers to memory
+        return try executeMovemToMem(m68k, inst, mask);
+    } else {
+        // Memory to registers
+        return try executeMovemFromMem(m68k, inst, mask);
+    }
+}
+
+fn executeMovemToMem(m68k: *cpu.M68k, inst: *const decoder.Instruction, mask: u16) !u32 {
+    // Get starting address
+    var addr: u32 = switch (inst.dst) {
+        .AddrReg => |reg| m68k.a[reg],
+        .AddrIndirect => |reg| m68k.a[reg],
+        .AddrPreDec => |reg| m68k.a[reg],
+        .AddrPostInc => |reg| m68k.a[reg],
+        .AddrDisplace => |info| m68k.a[info.reg] +% @as(u32, @bitCast(@as(i32, info.displacement))),
+        .Address => |a| a,
+        else => return error.InvalidOperand,
+    };
+    
+    var count: u32 = 0;
+    
+    // For predecrement mode, registers are stored in reverse order
+    const is_predec = switch (inst.dst) {
+        .AddrPreDec => true,
+        else => false,
+    };
+    
+    if (is_predec) {
+        // Store in reverse order: A7 to A0, then D7 to D0
+        var bit: i32 = 15;
+        while (bit >= 0) : (bit -= 1) {
+            if ((mask & (@as(u16, 1) << @intCast(bit))) != 0) {
+                const value = if (bit >= 8) m68k.a[@intCast(bit - 8)] else m68k.d[@intCast(bit)];
+                
+                if (inst.data_size == .Word) {
+                    addr -%= 2;
+                    try m68k.memory.write16(addr, @truncate(value));
+                } else {
+                    addr -%= 4;
+                    try m68k.memory.write32(addr, value);
+                }
+                count += 1;
+            }
+        }
+        
+        // Update address register if predecrement
+        switch (inst.dst) {
+            .AddrPreDec => |reg| m68k.a[reg] = addr,
+            else => {},
+        }
+    } else {
+        // Normal order: D0 to D7, then A0 to A7
+        for (0..16) |i| {
+            if ((mask & (@as(u16, 1) << @intCast(i))) != 0) {
+                const value = if (i < 8) m68k.d[i] else m68k.a[i - 8];
+                
+                if (inst.data_size == .Word) {
+                    try m68k.memory.write16(addr, @truncate(value));
+                    addr += 2;
+                } else {
+                    try m68k.memory.write32(addr, value);
+                    addr += 4;
+                }
+                count += 1;
+            }
+        }
+    }
+    
+    m68k.pc += 4; // opcode + extension word
+    return 8 + count * (if (inst.data_size == .Word) @as(u32, 4) else 8);
+}
+
+fn executeMovemFromMem(m68k: *cpu.M68k, inst: *const decoder.Instruction, mask: u16) !u32 {
+    var addr: u32 = switch (inst.dst) {
+        .AddrReg => |reg| m68k.a[reg],
+        .AddrIndirect => |reg| m68k.a[reg],
+        .AddrPreDec => |reg| m68k.a[reg],
+        .AddrPostInc => |reg| m68k.a[reg],
+        .AddrDisplace => |info| m68k.a[info.reg] +% @as(u32, @bitCast(@as(i32, info.displacement))),
+        .Address => |a| a,
+        else => return error.InvalidOperand,
+    };
+    
+    var count: u32 = 0;
+    
+    // Load in order: D0 to D7, then A0 to A7
+    for (0..16) |i| {
+        if ((mask & (@as(u16, 1) << @intCast(i))) != 0) {
+            if (inst.data_size == .Word) {
+                const value_word = try m68k.memory.read16(addr);
+                const value: u32 = @bitCast(@as(i32, @as(i16, @bitCast(value_word)))); // Sign extend
+                if (i < 8) {
+                    m68k.d[i] = value;
+                } else {
+                    m68k.a[i - 8] = value;
+                }
+                addr += 2;
+            } else {
+                const value = try m68k.memory.read32(addr);
+                if (i < 8) {
+                    m68k.d[i] = value;
+                } else {
+                    m68k.a[i - 8] = value;
+                }
+                addr += 4;
+            }
+            count += 1;
+        }
+    }
+    
+    // Update address register if postincrement
+    switch (inst.dst) {
+        .AddrPostInc => |reg| m68k.a[reg] = addr,
+        else => {},
+    }
+    
+    m68k.pc += 4; // opcode + extension word
+    return 8 + count * (if (inst.data_size == .Word) @as(u32, 4) else 8);
 }
 
 // ============================================================================

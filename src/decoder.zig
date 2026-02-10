@@ -229,6 +229,15 @@ pub const Decoder = struct {
                 } else if ((opcode & 0xFFF0) == 0x4E40) {
                     inst.mnemonic = .TRAP;
                     inst.src = .{ .Immediate8 = @truncate(opcode & 0xF) };
+                } else if ((opcode & 0xFFF8) == 0x4E50) {
+                    // LINK An, #<displacement>
+                    inst.mnemonic = .LINK;
+                    inst.dst = .{ .AddrReg = @truncate(opcode & 0x7) };
+                    inst.src = .{ .Immediate16 = 0 }; // Will be read from extension word
+                } else if ((opcode & 0xFFF8) == 0x4E58) {
+                    // UNLK An
+                    inst.mnemonic = .UNLK;
+                    inst.dst = .{ .AddrReg = @truncate(opcode & 0x7) };
                 } else if ((opcode & 0xFF00) == 0x4E00) {
                     // JSR, JMP
                     const ea_mode = (opcode >> 3) & 0x7;
@@ -272,10 +281,38 @@ pub const Decoder = struct {
                         2 => .Long,
                         else => .Long,
                     };
+                } else if ((opcode & 0xFB80) == 0x4880) {
+                    // MOVEM registers to/from memory
+                    // 0100 1d00 1s mmmrrr
+                    // d: direction (0=regs->mem, 1=mem->regs)
+                    // s: size (0=word, 1=long)
+                    inst.mnemonic = .MOVEM;
+                    const direction = (opcode >> 10) & 1;
+                    inst.data_size = if ((opcode & 0x40) != 0) .Long else .Word;
+                    
+                    // Register list in extension word
+                    inst.src = .{ .Immediate16 = 0 }; // Register mask from extension word
+                    
+                    const ea_mode = (opcode >> 3) & 0x7;
+                    const ea_reg = opcode & 0x7;
+                    inst.dst = decodeEA(ea_mode, @truncate(ea_reg));
+                    
+                    // Store direction in unused field (will use in executor)
+                    _ = direction;
                 } else if ((opcode & 0xFFC0) == 0x4840) {
-                    // SWAP
-                    inst.mnemonic = .SWAP;
-                    inst.dst = .{ .DataReg = @truncate(opcode & 0x7) };
+                    // SWAP or PEA - distinguish by EA mode
+                    const ea_mode = (opcode >> 3) & 0x7;
+                    const ea_reg = opcode & 0x7;
+                    
+                    if (ea_mode == 0) {
+                        // SWAP Dn (mode 000)
+                        inst.mnemonic = .SWAP;
+                        inst.dst = .{ .DataReg = @truncate(ea_reg) };
+                    } else {
+                        // PEA <ea>
+                        inst.mnemonic = .PEA;
+                        inst.src = decodeEA(ea_mode, @truncate(ea_reg));
+                    }
                 } else if ((opcode & 0xFFC0) == 0x4880 or (opcode & 0xFFC0) == 0x48C0) {
                     // EXT.W or EXT.L
                     inst.mnemonic = .EXT;
