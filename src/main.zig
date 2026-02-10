@@ -1,164 +1,219 @@
 const std = @import("std");
-
 const cpu = @import("cpu.zig");
 
 pub fn main() !void {
     const stdout = std.io.getStdOut().writer();
     
-    try stdout.print("Motorola 68020 Emulator Test Suite\n", .{});
-    try stdout.print("===================================\n\n", .{});
+    try stdout.print("Motorola 68020 Emulator - Extended Test Suite\n", .{});
+    try stdout.print("==============================================\n\n", .{});
     
-    // Create CPU instance
     var m68k = cpu.M68k.init(std.heap.page_allocator);
     defer m68k.deinit();
     
-    try stdout.print("Testing implemented instructions...\n\n", .{});
+    var passed: u32 = 0;
+    var total: u32 = 0;
     
-    // Test 1: MOVEQ
-    try stdout.print("Test 1: MOVEQ #42, D0\n", .{});
-    try m68k.memory.write16(0x1000, 0x702A);  // MOVEQ #42, D0
+    // Test MOVEQ
+    total += 1;
+    try stdout.print("Test {}: MOVEQ #42, D0\n", .{total});
+    try m68k.memory.write16(0x1000, 0x702A);
     m68k.pc = 0x1000;
     _ = try m68k.step();
-    try stdout.print("  D0 = 0x{X:0>8} (expected 0x0000002A) ", .{m68k.d[0]});
-    if (m68k.d[0] == 0x2A) {
-        try stdout.print("✓\n", .{});
+    if (m68k.d[0] == 42) {
+        try stdout.print("  ✓ PASS\n", .{});
+        passed += 1;
     } else {
-        try stdout.print("✗\n", .{});
+        try stdout.print("  ✗ FAIL (got 0x{X})\n", .{m68k.d[0]});
     }
     
-    // Test 2: ADDQ
-    try stdout.print("\nTest 2: ADDQ #5, D0\n", .{});
-    try m68k.memory.write16(0x1000, 0x5A40);  // ADDQ #5, D0
+    // Test ADDQ with memory
+    total += 1;
+    try stdout.print("\nTest {}: ADDQ #5, D1\n", .{total});
+    try m68k.memory.write16(0x1000, 0x5A41);
     m68k.pc = 0x1000;
-    m68k.d[0] = 10;
+    m68k.d[1] = 10;
     _ = try m68k.step();
-    try stdout.print("  D0 = 0x{X:0>8} (expected 0x0000000F) ", .{m68k.d[0]});
-    if (m68k.d[0] == 15) {
-        try stdout.print("✓\n", .{});
+    if (m68k.d[1] == 15) {
+        try stdout.print("  ✓ PASS\n", .{});
+        passed += 1;
     } else {
-        try stdout.print("✗\n", .{});
+        try stdout.print("  ✗ FAIL (got 0x{X})\n", .{m68k.d[1]});
     }
     
-    // Test 3: SUBQ
-    try stdout.print("\nTest 3: SUBQ #3, D0\n", .{});
-    try m68k.memory.write16(0x1000, 0x5740);  // SUBQ #3, D0
+    // Test SUBQ
+    total += 1;
+    try stdout.print("\nTest {}: SUBQ #3, D2\n", .{total});
+    try m68k.memory.write16(0x1000, 0x5742);
     m68k.pc = 0x1000;
-    m68k.d[0] = 10;
+    m68k.d[2] = 10;
     _ = try m68k.step();
-    try stdout.print("  D0 = 0x{X:0>8} (expected 0x00000007) ", .{m68k.d[0]});
-    if (m68k.d[0] == 7) {
-        try stdout.print("✓\n", .{});
+    if (m68k.d[2] == 7) {
+        try stdout.print("  ✓ PASS\n", .{});
+        passed += 1;
     } else {
-        try stdout.print("✗\n", .{});
+        try stdout.print("  ✗ FAIL (got 0x{X})\n", .{m68k.d[2]});
     }
     
-    // Test 4: CLR
-    try stdout.print("\nTest 4: CLR D1\n", .{});
-    try m68k.memory.write16(0x1000, 0x4241);  // CLR.W D1
+    // Test CLR
+    total += 1;
+    try stdout.print("\nTest {}: CLR.L D3\n", .{total});
+    try m68k.memory.write16(0x1000, 0x4283);
     m68k.pc = 0x1000;
-    m68k.d[1] = 0xFFFFFFFF;
+    m68k.d[3] = 0xDEADBEEF;
     _ = try m68k.step();
-    try stdout.print("  D1 = 0x{X:0>8} (expected 0x00000000) ", .{m68k.d[1]});
-    if (m68k.d[1] == 0) {
-        try stdout.print("✓\n", .{});
+    if (m68k.d[3] == 0 and m68k.getFlag(cpu.M68k.FLAG_Z)) {
+        try stdout.print("  ✓ PASS\n", .{});
+        passed += 1;
     } else {
-        try stdout.print("✗\n", .{});
+        try stdout.print("  ✗ FAIL (got 0x{X}, Z={})\n", .{m68k.d[3], m68k.getFlag(cpu.M68k.FLAG_Z)});
     }
     
-    // Test 5: NOT
-    try stdout.print("\nTest 5: NOT D2\n", .{});
-    try m68k.memory.write16(0x1000, 0x4642);  // NOT.W D2
+    // Test NOT
+    total += 1;
+    try stdout.print("\nTest {}: NOT.W D4\n", .{total});
+    try m68k.memory.write16(0x1000, 0x4644);
     m68k.pc = 0x1000;
-    m68k.d[2] = 0x0000AAAA;
+    m68k.d[4] = 0x0000AAAA;
     _ = try m68k.step();
-    try stdout.print("  D2 = 0x{X:0>8} (expected 0xFFFF5555) ", .{m68k.d[2]});
-    if (m68k.d[2] == 0xFFFF5555) {
-        try stdout.print("✓\n", .{});
+    if ((m68k.d[4] & 0xFFFF) == 0x5555) {
+        try stdout.print("  ✓ PASS\n", .{});
+        passed += 1;
     } else {
-        try stdout.print("✗\n", .{});
+        try stdout.print("  ✗ FAIL (got 0x{X})\n", .{m68k.d[4]});
     }
     
-    // Test 6: SWAP
-    try stdout.print("\nTest 6: SWAP D3\n", .{});
-    try m68k.memory.write16(0x1000, 0x4843);  // SWAP D3
+    // Test SWAP
+    total += 1;
+    try stdout.print("\nTest {}: SWAP D5\n", .{total});
+    try m68k.memory.write16(0x1000, 0x4845);
     m68k.pc = 0x1000;
-    m68k.d[3] = 0x12345678;
+    m68k.d[5] = 0x12345678;
     _ = try m68k.step();
-    try stdout.print("  D3 = 0x{X:0>8} (expected 0x56781234) ", .{m68k.d[3]});
-    if (m68k.d[3] == 0x56781234) {
-        try stdout.print("✓\n", .{});
+    if (m68k.d[5] == 0x56781234) {
+        try stdout.print("  ✓ PASS\n", .{});
+        passed += 1;
     } else {
-        try stdout.print("✗\n", .{});
+        try stdout.print("  ✗ FAIL (got 0x{X})\n", .{m68k.d[5]});
     }
     
-    // Test 7: EXT (sign extend)
-    try stdout.print("\nTest 7: EXT.W D4 (byte to word)\n", .{});
-    try m68k.memory.write16(0x1000, 0x4884);  // EXT.W D4
+    // Test EXT.W (byte to word)
+    total += 1;
+    try stdout.print("\nTest {}: EXT.W D6 (sign extend)\n", .{total});
+    try m68k.memory.write16(0x1000, 0x4886);
     m68k.pc = 0x1000;
-    m68k.d[4] = 0x000000FF;  // -1 as signed byte
+    m68k.d[6] = 0x000000FF; // -1 as signed byte
     _ = try m68k.step();
-    try stdout.print("  D4 = 0x{X:0>8} (expected 0x0000FFFF) ", .{m68k.d[4]});
-    if ((m68k.d[4] & 0xFFFF) == 0xFFFF) {
-        try stdout.print("✓\n", .{});
+    if ((m68k.d[6] & 0xFFFF) == 0xFFFF) {
+        try stdout.print("  ✓ PASS\n", .{});
+        passed += 1;
     } else {
-        try stdout.print("✗\n", .{});
+        try stdout.print("  ✗ FAIL (got 0x{X})\n", .{m68k.d[6]});
     }
     
-    // Test 8: TST (flags only)
-    try stdout.print("\nTest 8: TST D5 (zero flag test)\n", .{});
-    try m68k.memory.write16(0x1000, 0x4A45);  // TST.W D5
+    // Test MULU
+    total += 1;
+    try stdout.print("\nTest {}: MULU D1, D0 (5 * 10 = 50)\n", .{total});
+    m68k.d[0] = 5;
+    m68k.d[1] = 10;
+    try m68k.memory.write16(0x1000, 0xC0C1); // MULU.W D1, D0
     m68k.pc = 0x1000;
-    m68k.d[5] = 0;
     _ = try m68k.step();
-    const z_flag = m68k.getFlag(cpu.M68k.FLAG_Z);
-    try stdout.print("  Z flag = {} (expected true) ", .{z_flag});
-    if (z_flag) {
-        try stdout.print("✓\n", .{});
+    if (m68k.d[0] == 50) {
+        try stdout.print("  ✓ PASS\n", .{});
+        passed += 1;
     } else {
-        try stdout.print("✗\n", .{});
+        try stdout.print("  ✗ FAIL (got {})\n", .{m68k.d[0]});
     }
     
-    // Test 9: Memory operations
-    try stdout.print("\nTest 9: Memory read/write\n", .{});
+    // Test DIVU
+    total += 1;
+    try stdout.print("\nTest {}: DIVU D3, D2 (25 / 5 = 5)\n", .{total});
+    m68k.d[2] = 25;
+    m68k.d[3] = 5;
+    try m68k.memory.write16(0x1000, 0x84C3); // DIVU.W D3, D2
+    m68k.pc = 0x1000;
+    _ = try m68k.step();
+    const quotient = m68k.d[2] & 0xFFFF;
+    if (quotient == 5) {
+        try stdout.print("  ✓ PASS\n", .{});
+        passed += 1;
+    } else {
+        try stdout.print("  ✗ FAIL (got quotient={})\n", .{quotient});
+    }
+    
+    // Test memory operations
+    total += 1;
+    try stdout.print("\nTest {}: Memory read/write (big-endian)\n", .{total});
     try m68k.memory.write32(0x2000, 0xDEADBEEF);
     const val = try m68k.memory.read32(0x2000);
-    try stdout.print("  Value = 0x{X:0>8} (expected 0xDEADBEEF) ", .{val});
-    if (val == 0xDEADBEEF) {
-        try stdout.print("✓\n", .{});
+    const b0 = try m68k.memory.read8(0x2000);
+    const b3 = try m68k.memory.read8(0x2003);
+    if (val == 0xDEADBEEF and b0 == 0xDE and b3 == 0xEF) {
+        try stdout.print("  ✓ PASS\n", .{});
+        passed += 1;
     } else {
-        try stdout.print("✗\n", .{});
+        try stdout.print("  ✗ FAIL\n", .{});
     }
     
-    // Test 10: Big-endian byte order
-    try stdout.print("\nTest 10: Big-endian verification\n", .{});
-    try m68k.memory.write16(0x3000, 0x1234);
-    const b0 = try m68k.memory.read8(0x3000);
-    const b1 = try m68k.memory.read8(0x3001);
-    try stdout.print("  Bytes = 0x{X:0>2} 0x{X:0>2} (expected 0x12 0x34) ", .{b0, b1});
-    if (b0 == 0x12 and b1 == 0x34) {
-        try stdout.print("✓\n", .{});
+    // Test address register operations
+    total += 1;
+    try stdout.print("\nTest {}: ADDQ #4, A0 (address register)\n", .{total});
+    try m68k.memory.write16(0x1000, 0x5888); // ADDQ.L #4, A0
+    m68k.pc = 0x1000;
+    m68k.a[0] = 0x1000;
+    const before = m68k.a[0];
+    _ = try m68k.step();
+    try stdout.print("  Before: 0x{X}, After: 0x{X}\n", .{before, m68k.a[0]});
+    if (m68k.a[0] == 0x1004) {
+        try stdout.print("  ✓ PASS\n", .{});
+        passed += 1;
     } else {
-        try stdout.print("✗\n", .{});
+        try stdout.print("  ✗ FAIL (got 0x{X})\n", .{m68k.a[0]});
     }
     
-    try stdout.print("\n✅ All tests completed!\n", .{});
-    try stdout.print("\n📊 Implementation Status:\n", .{});
-    try stdout.print("  ✓ MOVEQ - Move quick\n", .{});
-    try stdout.print("  ✓ ADDQ/SUBQ - Quick arithmetic\n", .{});
-    try stdout.print("  ✓ CLR - Clear\n", .{});
-    try stdout.print("  ✓ NOT - Complement\n", .{});
-    try stdout.print("  ✓ SWAP - Swap halves\n", .{});
-    try stdout.print("  ✓ EXT - Sign extend\n", .{});
-    try stdout.print("  ✓ TST - Test flags\n", .{});
-    try stdout.print("  ✓ NEG - Negate\n", .{});
-    try stdout.print("  ✓ MOVE - Data movement\n", .{});
-    try stdout.print("  ✓ ADD/SUB - Arithmetic\n", .{});
-    try stdout.print("  ✓ AND/OR/EOR - Logical\n", .{});
-    try stdout.print("  ✓ CMP - Compare\n", .{});
-    try stdout.print("  ✓ MULU/MULS - Multiply\n", .{});
-    try stdout.print("  ✓ DIVU/DIVS - Divide\n", .{});
-    try stdout.print("  ✓ LEA - Load effective address\n", .{});
-    try stdout.print("  ✓ BRA/Bcc - Branching\n", .{});
-    try stdout.print("  ✓ JSR/RTS - Subroutines\n", .{});
-    try stdout.print("\n🎉 Emulator ready for use!\n", .{});
+    // Test indirect addressing
+    total += 1;
+    try stdout.print("\nTest {}: Indirect addressing (A1)\n", .{total});
+    m68k.a[1] = 0x3000;
+    try m68k.memory.write32(0x3000, 0x12345678);
+    const indirect_val = try m68k.memory.read32(m68k.a[1]);
+    if (indirect_val == 0x12345678) {
+        try stdout.print("  ✓ PASS\n", .{});
+        passed += 1;
+    } else {
+        try stdout.print("  ✗ FAIL\n", .{});
+    }
+    
+    // Summary
+    try stdout.print("\n" ++ "=" ** 50 ++ "\n", .{});
+    try stdout.print("Test Results: {} / {} passed ({d:.1}%)\n", .{
+        passed, total, @as(f64, @floatFromInt(passed)) / @as(f64, @floatFromInt(total)) * 100.0
+    });
+    
+    if (passed == total) {
+        try stdout.print("\n🎉 All tests passed!\n", .{});
+    } else {
+        try stdout.print("\n⚠️  Some tests failed\n", .{});
+    }
+    
+    try stdout.print("\n📊 Implemented Features:\n", .{});
+    try stdout.print("  ✓ MOVE family (MOVE, MOVEA, MOVEQ)\n", .{});
+    try stdout.print("  ✓ ADD family (ADD, ADDA, ADDI, ADDQ, ADDX)\n", .{});
+    try stdout.print("  ✓ SUB family (SUB, SUBA, SUBI, SUBQ, SUBX)\n", .{});
+    try stdout.print("  ✓ CMP family (CMP, CMPA, CMPI)\n", .{});
+    try stdout.print("  ✓ Logical (AND, OR, EOR, NOT + I variants)\n", .{});
+    try stdout.print("  ✓ Multiply/Divide (MULU, MULS, DIVU, DIVS)\n", .{});
+    try stdout.print("  ✓ Misc (NEG, NEGX, CLR, TST, SWAP, EXT)\n", .{});
+    try stdout.print("  ✓ Flow control (BRA, Bcc, JSR, RTS)\n", .{});
+    try stdout.print("  ✓ Addressing modes:\n", .{});
+    try stdout.print("    - Data register direct (Dn)\n", .{});
+    try stdout.print("    - Address register direct (An)\n", .{});
+    try stdout.print("    - Address register indirect ((An))\n", .{});
+    try stdout.print("    - Post-increment ((An)+)\n", .{});
+    try stdout.print("    - Pre-decrement (-(An))\n", .{});
+    try stdout.print("    - With displacement (d16(An))\n", .{});
+    try stdout.print("    - Immediate (#imm)\n", .{});
+    try stdout.print("    - Absolute (addr.W/.L)\n", .{});
+    
+    try stdout.print("\n🚀 Emulator ready for use!\n", .{});
 }

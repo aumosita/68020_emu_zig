@@ -129,7 +129,7 @@ pub const Decoder = struct {
                         3 => .BSET,
                         else => .UNKNOWN,
                     };
-                } else if ((opcode & 0xFF00) == 0x0000) {
+                } else if ((opcode & 0xFF00) == 0x0000 or (opcode & 0xFF00) == 0x0200 or (opcode & 0xFF00) == 0x0400 or (opcode & 0xFF00) == 0x0600 or (opcode & 0xFF00) == 0x0A00 or (opcode & 0xFF00) == 0x0C00) {
                     // ORI, ANDI, SUBI, ADDI, EORI, CMPI to various destinations
                     const subop = (opcode >> 9) & 0x7;
                     inst.mnemonic = switch (subop) {
@@ -141,6 +141,27 @@ pub const Decoder = struct {
                         6 => .CMPI,
                         else => .UNKNOWN,
                     };
+                    
+                    // Decode size
+                    const size_bits = (opcode >> 6) & 0x3;
+                    inst.data_size = switch (size_bits) {
+                        0 => .Byte,
+                        1 => .Word,
+                        2 => .Long,
+                        else => .Long,
+                    };
+                    
+                    // Immediate source (will be read from extension word)
+                    inst.src = switch (inst.data_size) {
+                        .Byte => .{ .Immediate8 = 0 },
+                        .Word => .{ .Immediate16 = 0 },
+                        .Long => .{ .Immediate32 = 0 },
+                    };
+                    
+                    // Decode destination
+                    const ea_mode = (opcode >> 3) & 0x7;
+                    const ea_reg = opcode & 0x7;
+                    inst.dst = decodeEA(ea_mode, @truncate(ea_reg));
                 } else {
                     inst.mnemonic = .UNKNOWN;
                 }
@@ -251,6 +272,15 @@ pub const Decoder = struct {
                     const is_sub = ((opcode >> 8) & 1) == 1;
                     inst.mnemonic = if (is_sub) .SUBQ else .ADDQ;
                     
+                    // Data size
+                    const size_bits = (opcode >> 6) & 0x3;
+                    inst.data_size = switch (size_bits) {
+                        0 => .Byte,
+                        1 => .Word,
+                        2 => .Long,
+                        else => .Long,
+                    };
+                    
                     // Immediate data (3 bits, 0 means 8)
                     var data: u8 = @truncate((opcode >> 9) & 0x7);
                     if (data == 0) data = 8;
@@ -289,10 +319,17 @@ pub const Decoder = struct {
             
             0x8 => {
                 // OR, DIVU, DIVS, SBCD
+                const opmode = (opcode >> 6) & 0x7;
+                
                 if ((opcode & 0x1F0) == 0x100) {
                     inst.mnemonic = .SBCD;
-                } else if ((opcode & 0x1C0) == 0x1C0) {
-                    inst.mnemonic = if (((opcode >> 8) & 1) == 0) .DIVU else .DIVS;
+                } else if (opmode == 0x3 or opmode == 0x7) {
+                    // DIVU (opmode=011) or DIVS (opmode=111)
+                    inst.mnemonic = if (opmode == 0x3) .DIVU else .DIVS;
+                    inst.dst = .{ .DataReg = @truncate((opcode >> 9) & 0x7) };
+                    const ea_mode = (opcode >> 3) & 0x7;
+                    const ea_reg = opcode & 0x7;
+                    inst.src = decodeEA(ea_mode, @truncate(ea_reg));
                 } else {
                     inst.mnemonic = .OR;
                 }
@@ -330,10 +367,17 @@ pub const Decoder = struct {
             
             0xC => {
                 // AND, MULU, MULS, ABCD, EXG
+                const opmode = (opcode >> 6) & 0x7;
+                
                 if ((opcode & 0x1F0) == 0x100) {
                     inst.mnemonic = .ABCD;
-                } else if ((opcode & 0x1C0) == 0x1C0) {
-                    inst.mnemonic = if (((opcode >> 8) & 1) == 0) .MULU else .MULS;
+                } else if (opmode == 0x3 or opmode == 0x7) {
+                    // MULU (opmode=011) or MULS (opmode=111)
+                    inst.mnemonic = if (opmode == 0x3) .MULU else .MULS;
+                    inst.dst = .{ .DataReg = @truncate((opcode >> 9) & 0x7) };
+                    const ea_mode = (opcode >> 3) & 0x7;
+                    const ea_reg = opcode & 0x7;
+                    inst.src = decodeEA(ea_mode, @truncate(ea_reg));
                 } else if ((opcode & 0x1F0) == 0x140 or (opcode & 0x1F0) == 0x148 or (opcode & 0x1F0) == 0x188) {
                     inst.mnemonic = .EXG;
                 } else {
