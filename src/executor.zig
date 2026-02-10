@@ -61,7 +61,11 @@ pub const Executor = struct {
             .RTS => return try executeRts(m68k),
             .BRA => return try executeBra(m68k, inst),
             .Bcc => return try executeBcc(m68k, inst),
+            .BSR => return try executeBsr(m68k, inst),
             .JSR => return try executeJsr(m68k, inst),
+            .JMP => return try executeJmp(m68k, inst),
+            .DBcc => return try executeDbcc(m68k, inst),
+            .Scc => return try executeScc(m68k, inst),
             
             .ASL => return try executeAsl(m68k, inst),
             .ASR => return try executeAsr(m68k, inst),
@@ -824,8 +828,81 @@ fn executeJsr(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     return 18;
 }
 
+fn executeJmp(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // JMP는 JSR과 동일하지만 return address를 push하지 않음
+    const target = try calculateEA(m68k, inst.dst);
+    m68k.pc = target;
+    return 8;
+}
+
+fn executeBsr(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // BSR은 BRA + return address push
+    const displacement = @as(i8, @bitCast(@as(u8, @truncate(inst.opcode & 0xFF))));
+    const return_addr = m68k.pc + 2;
+    
+    // Return address를 스택에 push
+    m68k.a[7] -= 4;
+    try m68k.memory.write32(m68k.a[7], return_addr);
+    
+    if (displacement == 0) {
+        // 16비트 displacement
+        const disp16 = try m68k.memory.read16(m68k.pc + 2);
+        m68k.pc = @intCast(@as(i32, @intCast(m68k.pc)) + 2 + @as(i32, @intCast(@as(i16, @bitCast(disp16)))));
+    } else {
+        // 8비트 displacement
+        m68k.pc = @intCast(@as(i32, @intCast(m68k.pc)) + 2 + @as(i32, displacement));
+    }
+    return 18;
+}
+
+fn executeDbcc(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    const reg = switch (inst.dst) {
+        .DataReg => |r| r,
+        else => return error.InvalidOperand,
+    };
+    
+    const condition: u4 = @truncate((inst.opcode >> 8) & 0xF);
+    
+    // 조건이 true이면 루프 종료 (카운터 감소 안함)
+    if (evaluateCondition(m68k, condition)) {
+        m68k.pc += 4; // opcode + displacement word
+        return 12;
+    }
+    
+    // 조건이 false면 카운터 감소
+    const counter: i16 = @bitCast(@as(u16, @truncate(m68k.d[reg])));
+    const new_counter = counter -% 1;
+    m68k.d[reg] = (m68k.d[reg] & 0xFFFF0000) | @as(u32, @bitCast(@as(i32, new_counter) & 0xFFFF));
+    
+    // 카운터가 -1이면 루프 종료
+    if (new_counter == -1) {
+        m68k.pc += 4;
+        return 14;
+    }
+    
+    // 분기 수행
+    const displacement = try m68k.memory.read16(m68k.pc + 2);
+    m68k.pc = @intCast(@as(i32, @intCast(m68k.pc)) + 2 + @as(i32, @intCast(@as(i16, @bitCast(displacement)))));
+    return 10;
+}
+
+fn executeScc(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    const condition: u4 = @truncate((inst.opcode >> 8) & 0xF);
+    
+    // 조건 평가
+    const condition_true = evaluateCondition(m68k, condition);
+    
+    // true면 0xFF, false면 0x00
+    const value: u8 = if (condition_true) 0xFF else 0x00;
+    
+    try setOperandValue(m68k, inst.dst, @as(u32, value), .Byte);
+    
+    m68k.pc += 2;
+    return 8;
+}
+
 // ============================================================================
-// Shift and Rotate operations
+// 시프트 및 로테이트 연산
 // ============================================================================
 
 fn executeAsl(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
@@ -1562,8 +1639,22 @@ fn setOperandValue(m68k: *cpu.M68k, operand: decoder.Operand, value: u32, size: 
 fn calculateEA(m68k: *cpu.M68k, operand: decoder.Operand) !u32 {
     return switch (operand) {
         .AddrIndirect => |reg| m68k.a[reg],
-        .AddrDisplace => |info| m68k.a[info.reg] +% @as(u32, @bitCast(@as(i32, info.displacement))),
-        .Address => |addr| addr,
+        .AddrDisplace => |info| blk: {
+            var disp = info.displacement;
+            if (disp == 0) {
+                // 디코더가 읽지 않은 경우 메모리에서 읽음 (opcode + 2)
+                disp = @bitCast(try m68k.memory.read16(m68k.pc + 2));
+            }
+            break :blk m68k.a[info.reg] +% @as(u32, @bitCast(@as(i32, disp)));
+        },
+        .Address => |addr| blk: {
+            var val = addr;
+            if (val == 0) {
+                // 절대 주소 읽기 (32비트 가정)
+                val = try m68k.memory.read32(m68k.pc + 2);
+            }
+            break :blk val;
+        },
         else => 0,
     };
 }

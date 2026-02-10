@@ -57,6 +57,15 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     b.installArtifact(stack_test);
+    
+    // Phase 1 test executable
+    const phase1_test = b.addExecutable(.{
+        .name = "m68020-emu-test-phase1",
+        .root_source_file = b.path("src/test_phase1.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    b.installArtifact(phase1_test);
 
     // Run step
     const run_cmd = b.addRunArtifact(exe);

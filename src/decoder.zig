@@ -338,6 +338,10 @@ pub const Decoder = struct {
                 } else if (size_bits == 0x3) {
                     // Scc: 0101 cccc 11 mmmrrr (size bits = 11)
                     inst.mnemonic = .Scc;
+                    const ea_mode = (opcode >> 3) & 0x7;
+                    const ea_reg = opcode & 0x7;
+                    inst.dst = decodeEA(ea_mode, @truncate(ea_reg));
+                    inst.data_size = .Byte;
                 } else {
                     // ADDQ/SUBQ
                     const is_sub = ((opcode >> 8) & 1) == 1;
