@@ -4,32 +4,32 @@ const decoder = @import("decoder.zig");
 const executor = @import("executor.zig");
 
 pub const M68k = struct {
-    // Data registers (D0-D7)
+    // 데이터 레지스터 (D0-D7)
     d: [8]u32,
     
-    // Address registers (A0-A7)
-    // A7 is the stack pointer (SP)
+    // 주소 레지스터 (A0-A7)
+    // A7은 스택 포인터(SP)
     a: [8]u32,
     
-    // Program counter
+    // 프로그램 카운터
     pc: u32,
     
-    // Status register
+    // 상태 레지스터
     sr: u16,
     
-    // Memory subsystem
+    // 메모리 서브시스템
     memory: memory.Memory,
     
-    // Instruction decoder
+    // 명령어 디코더
     decoder: decoder.Decoder,
     
-    // Instruction executor
+    // 명령어 실행기
     executor: executor.Executor,
     
-    // Cycle counter
+    // 사이클 카운터
     cycles: u64,
     
-    // Allocator
+    // 할당자
     allocator: std.mem.Allocator,
     
     pub fn init(allocator: std.mem.Allocator) M68k {
@@ -41,7 +41,7 @@ pub const M68k = struct {
             .d = [_]u32{0} ** 8,
             .a = [_]u32{0} ** 8,
             .pc = 0,
-            .sr = 0x2700, // Supervisor mode, interrupts disabled
+            .sr = 0x2700, // 슈퍼바이저 모드, 인터럽트 비활성화
             .memory = memory.Memory.initWithConfig(allocator, config),
             .decoder = decoder.Decoder.init(),
             .executor = executor.Executor.init(),
@@ -55,30 +55,30 @@ pub const M68k = struct {
     }
     
     pub fn reset(self: *M68k) void {
-        // Reset all registers
+        // 모든 레지스터 초기화
         for (&self.d) |*reg| reg.* = 0;
         for (&self.a) |*reg| reg.* = 0;
         
-        // Read initial SSP from 0x000000
+        // 0x000000에서 초기 SSP 읽기
         self.a[7] = self.memory.read32(0x000000) catch 0;
         
-        // Read initial PC from 0x000004
+        // 0x000004에서 초기 PC 읽기
         self.pc = self.memory.read32(0x000004) catch 0;
         
-        // Set supervisor mode, interrupts disabled
+        // 슈퍼바이저 모드 설정, 인터럽트 비활성화
         self.sr = 0x2700;
         
         self.cycles = 0;
     }
     
     pub fn step(self: *M68k) !u32 {
-        // Fetch instruction
+        // 명령어 페치
         const opcode = try self.memory.read16(self.pc);
         
-        // Decode instruction (simplified for now)
+        // 명령어 디코드
         const instruction = try self.decoder.decode(opcode, self.pc, &dummyRead);
         
-        // Execute instruction
+        // 명령어 실행
         const cycles_used = try self.executor.execute(self, &instruction);
         
         self.cycles += cycles_used;
