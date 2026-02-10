@@ -63,6 +63,15 @@ pub const Executor = struct {
             .Bcc => return try executeBcc(m68k, inst),
             .JSR => return try executeJsr(m68k, inst),
             
+            .ASL => return try executeAsl(m68k, inst),
+            .ASR => return try executeAsr(m68k, inst),
+            .LSL => return try executeLsl(m68k, inst),
+            .LSR => return try executeLsr(m68k, inst),
+            .ROL => return try executeRol(m68k, inst),
+            .ROR => return try executeRor(m68k, inst),
+            .ROXL => return try executeRoxl(m68k, inst),
+            .ROXR => return try executeRoxr(m68k, inst),
+            
             .ILLEGAL => return error.IllegalInstruction,
             else => {
                 m68k.pc += 2;
@@ -803,6 +812,318 @@ fn executeJsr(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     try m68k.memory.write32(m68k.a[7], return_addr);
     m68k.pc += 2;
     return 18;
+}
+
+// ============================================================================
+// Shift and Rotate operations
+// ============================================================================
+
+fn executeAsl(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    const shift_count = try getShiftCount(m68k, inst.src);
+    var value = try getOperandValue(m68k, inst.dst, inst.data_size);
+    
+    const mask: u32 = switch (inst.data_size) {
+        .Byte => 0xFF,
+        .Word => 0xFFFF,
+        .Long => 0xFFFFFFFF,
+    };
+    const sign_bit: u32 = switch (inst.data_size) {
+        .Byte => 0x80,
+        .Word => 0x8000,
+        .Long => 0x80000000,
+    };
+    
+    var last_bit_out: bool = false;
+    var overflow = false;
+    const original_sign = (value & sign_bit) != 0;
+    
+    for (0..shift_count) |_| {
+        last_bit_out = (value & sign_bit) != 0;
+        value = (value << 1) & mask;
+        
+        // Check if sign changed (overflow)
+        const new_sign = (value & sign_bit) != 0;
+        if (new_sign != original_sign) {
+            overflow = true;
+        }
+    }
+    
+    try setOperandValue(m68k, inst.dst, value, inst.data_size);
+    
+    m68k.setFlag(cpu.M68k.FLAG_N, (value & sign_bit) != 0);
+    m68k.setFlag(cpu.M68k.FLAG_Z, value == 0);
+    m68k.setFlag(cpu.M68k.FLAG_V, overflow);
+    m68k.setFlag(cpu.M68k.FLAG_C, last_bit_out);
+    m68k.setFlag(cpu.M68k.FLAG_X, last_bit_out);
+    
+    m68k.pc += 2;
+    return @as(u32, @intCast(6 + 2 * shift_count));
+}
+
+fn executeAsr(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    const shift_count = try getShiftCount(m68k, inst.src);
+    var value = try getOperandValue(m68k, inst.dst, inst.data_size);
+    
+    const mask: u32 = switch (inst.data_size) {
+        .Byte => 0xFF,
+        .Word => 0xFFFF,
+        .Long => 0xFFFFFFFF,
+    };
+    const sign_bit: u32 = switch (inst.data_size) {
+        .Byte => 0x80,
+        .Word => 0x8000,
+        .Long => 0x80000000,
+    };
+    
+    var last_bit_out: bool = false;
+    const sign_extend = (value & sign_bit) != 0;
+    
+    for (0..shift_count) |_| {
+        last_bit_out = (value & 1) != 0;
+        value = (value >> 1) & mask;  // Mask after shift to keep within size
+        if (sign_extend) {
+            value |= sign_bit;
+        }
+    }
+    
+    try setOperandValue(m68k, inst.dst, value, inst.data_size);
+    
+    m68k.setFlag(cpu.M68k.FLAG_N, (value & sign_bit) != 0);
+    m68k.setFlag(cpu.M68k.FLAG_Z, value == 0);
+    m68k.setFlag(cpu.M68k.FLAG_V, false);
+    m68k.setFlag(cpu.M68k.FLAG_C, last_bit_out);
+    m68k.setFlag(cpu.M68k.FLAG_X, last_bit_out);
+    
+    m68k.pc += 2;
+    return @as(u32, @intCast(6 + 2 * shift_count));
+}
+
+fn executeLsl(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    const shift_count = try getShiftCount(m68k, inst.src);
+    var value = try getOperandValue(m68k, inst.dst, inst.data_size);
+    
+    const mask: u32 = switch (inst.data_size) {
+        .Byte => 0xFF,
+        .Word => 0xFFFF,
+        .Long => 0xFFFFFFFF,
+    };
+    const sign_bit: u32 = switch (inst.data_size) {
+        .Byte => 0x80,
+        .Word => 0x8000,
+        .Long => 0x80000000,
+    };
+    
+    var last_bit_out: bool = false;
+    
+    for (0..shift_count) |_| {
+        last_bit_out = (value & sign_bit) != 0;
+        value = (value << 1) & mask;
+    }
+    
+    try setOperandValue(m68k, inst.dst, value, inst.data_size);
+    
+    m68k.setFlag(cpu.M68k.FLAG_N, (value & sign_bit) != 0);
+    m68k.setFlag(cpu.M68k.FLAG_Z, value == 0);
+    m68k.setFlag(cpu.M68k.FLAG_V, false);
+    m68k.setFlag(cpu.M68k.FLAG_C, last_bit_out);
+    m68k.setFlag(cpu.M68k.FLAG_X, last_bit_out);
+    
+    m68k.pc += 2;
+    return @as(u32, @intCast(6 + 2 * shift_count));
+}
+
+fn executeLsr(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    const shift_count = try getShiftCount(m68k, inst.src);
+    var value = try getOperandValue(m68k, inst.dst, inst.data_size);
+    
+    const mask: u32 = switch (inst.data_size) {
+        .Byte => 0xFF,
+        .Word => 0xFFFF,
+        .Long => 0xFFFFFFFF,
+    };
+    const sign_bit: u32 = switch (inst.data_size) {
+        .Byte => 0x80,
+        .Word => 0x8000,
+        .Long => 0x80000000,
+    };
+    
+    var last_bit_out: bool = false;
+    
+    for (0..shift_count) |_| {
+        last_bit_out = (value & 1) != 0;
+        value = (value >> 1) & mask;
+    }
+    
+    try setOperandValue(m68k, inst.dst, value, inst.data_size);
+    
+    m68k.setFlag(cpu.M68k.FLAG_N, (value & sign_bit) != 0);
+    m68k.setFlag(cpu.M68k.FLAG_Z, value == 0);
+    m68k.setFlag(cpu.M68k.FLAG_V, false);
+    m68k.setFlag(cpu.M68k.FLAG_C, last_bit_out);
+    m68k.setFlag(cpu.M68k.FLAG_X, last_bit_out);
+    
+    m68k.pc += 2;
+    return @as(u32, @intCast(6 + 2 * shift_count));
+}
+
+fn executeRol(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    const shift_count = try getShiftCount(m68k, inst.src);
+    var value = try getOperandValue(m68k, inst.dst, inst.data_size);
+    
+    const mask: u32 = switch (inst.data_size) {
+        .Byte => 0xFF,
+        .Word => 0xFFFF,
+        .Long => 0xFFFFFFFF,
+    };
+    const sign_bit: u32 = switch (inst.data_size) {
+        .Byte => 0x80,
+        .Word => 0x8000,
+        .Long => 0x80000000,
+    };
+    
+    var last_bit_out: bool = false;
+    
+    for (0..shift_count) |_| {
+        const msb = (value & sign_bit) != 0;
+        last_bit_out = msb;
+        value = (value << 1) & mask;
+        if (msb) {
+            value |= 1;
+        }
+    }
+    
+    try setOperandValue(m68k, inst.dst, value, inst.data_size);
+    
+    m68k.setFlag(cpu.M68k.FLAG_N, (value & sign_bit) != 0);
+    m68k.setFlag(cpu.M68k.FLAG_Z, value == 0);
+    m68k.setFlag(cpu.M68k.FLAG_V, false);
+    m68k.setFlag(cpu.M68k.FLAG_C, last_bit_out);
+    // ROL doesn't affect X flag
+    
+    m68k.pc += 2;
+    return @as(u32, @intCast(6 + 2 * shift_count));
+}
+
+fn executeRor(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    const shift_count = try getShiftCount(m68k, inst.src);
+    var value = try getOperandValue(m68k, inst.dst, inst.data_size);
+    
+    const mask: u32 = switch (inst.data_size) {
+        .Byte => 0xFF,
+        .Word => 0xFFFF,
+        .Long => 0xFFFFFFFF,
+    };
+    const sign_bit: u32 = switch (inst.data_size) {
+        .Byte => 0x80,
+        .Word => 0x8000,
+        .Long => 0x80000000,
+    };
+    
+    var last_bit_out: bool = false;
+    
+    for (0..shift_count) |_| {
+        const lsb = (value & 1) != 0;
+        last_bit_out = lsb;
+        value = (value >> 1) & mask;
+        if (lsb) {
+            value |= sign_bit;
+        }
+    }
+    
+    try setOperandValue(m68k, inst.dst, value, inst.data_size);
+    
+    m68k.setFlag(cpu.M68k.FLAG_N, (value & sign_bit) != 0);
+    m68k.setFlag(cpu.M68k.FLAG_Z, value == 0);
+    m68k.setFlag(cpu.M68k.FLAG_V, false);
+    m68k.setFlag(cpu.M68k.FLAG_C, last_bit_out);
+    // ROR doesn't affect X flag
+    
+    m68k.pc += 2;
+    return @as(u32, @intCast(6 + 2 * shift_count));
+}
+
+fn executeRoxl(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    const shift_count = try getShiftCount(m68k, inst.src);
+    var value = try getOperandValue(m68k, inst.dst, inst.data_size);
+    
+    const mask: u32 = switch (inst.data_size) {
+        .Byte => 0xFF,
+        .Word => 0xFFFF,
+        .Long => 0xFFFFFFFF,
+    };
+    const sign_bit: u32 = switch (inst.data_size) {
+        .Byte => 0x80,
+        .Word => 0x8000,
+        .Long => 0x80000000,
+    };
+    
+    var x_flag = m68k.getFlag(cpu.M68k.FLAG_X);
+    
+    for (0..shift_count) |_| {
+        const msb = (value & sign_bit) != 0;
+        value = (value << 1) & mask;
+        if (x_flag) {
+            value |= 1;
+        }
+        x_flag = msb;
+    }
+    
+    try setOperandValue(m68k, inst.dst, value, inst.data_size);
+    
+    m68k.setFlag(cpu.M68k.FLAG_N, (value & sign_bit) != 0);
+    m68k.setFlag(cpu.M68k.FLAG_Z, value == 0);
+    m68k.setFlag(cpu.M68k.FLAG_V, false);
+    m68k.setFlag(cpu.M68k.FLAG_C, x_flag);
+    m68k.setFlag(cpu.M68k.FLAG_X, x_flag);
+    
+    m68k.pc += 2;
+    return @as(u32, @intCast(6 + 2 * shift_count));
+}
+
+fn executeRoxr(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    const shift_count = try getShiftCount(m68k, inst.src);
+    var value = try getOperandValue(m68k, inst.dst, inst.data_size);
+    
+    const mask: u32 = switch (inst.data_size) {
+        .Byte => 0xFF,
+        .Word => 0xFFFF,
+        .Long => 0xFFFFFFFF,
+    };
+    const sign_bit: u32 = switch (inst.data_size) {
+        .Byte => 0x80,
+        .Word => 0x8000,
+        .Long => 0x80000000,
+    };
+    
+    var x_flag = m68k.getFlag(cpu.M68k.FLAG_X);
+    
+    for (0..shift_count) |_| {
+        const lsb = (value & 1) != 0;
+        value = (value >> 1) & mask;
+        if (x_flag) {
+            value |= sign_bit;
+        }
+        x_flag = lsb;
+    }
+    
+    try setOperandValue(m68k, inst.dst, value, inst.data_size);
+    
+    m68k.setFlag(cpu.M68k.FLAG_N, (value & sign_bit) != 0);
+    m68k.setFlag(cpu.M68k.FLAG_Z, value == 0);
+    m68k.setFlag(cpu.M68k.FLAG_V, false);
+    m68k.setFlag(cpu.M68k.FLAG_C, x_flag);
+    m68k.setFlag(cpu.M68k.FLAG_X, x_flag);
+    
+    m68k.pc += 2;
+    return @as(u32, @intCast(6 + 2 * shift_count));
+}
+
+fn getShiftCount(m68k: *cpu.M68k, src: decoder.Operand) !u32 {
+    return switch (src) {
+        .Immediate8 => |v| @as(u32, v & 0x3F),  // Modulo 64
+        .DataReg => |reg| m68k.d[reg] & 0x3F,
+        else => 0,
+    };
 }
 
 // ============================================================================

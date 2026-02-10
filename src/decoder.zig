@@ -392,16 +392,59 @@ pub const Decoder = struct {
             
             0xE => {
                 // Shift/rotate
-                const direction = (opcode >> 8) & 1;  // 0=right, 1=left
-                const shift_type = (opcode >> 3) & 0x3;
+                const ir = (opcode >> 5) & 1;  // 0=immediate count, 1=register count
+                const size_bits = (opcode >> 6) & 0x3;
                 
-                inst.mnemonic = switch (shift_type) {
-                    0 => if (direction == 1) .ASL else .ASR,
-                    1 => if (direction == 1) .LSL else .LSR,
-                    2 => if (direction == 1) .ROXL else .ROXR,
-                    3 => if (direction == 1) .ROL else .ROR,
-                    else => .UNKNOWN,
-                };
+                if (size_bits == 0x3) {
+                    // Memory shift (single bit): 1110 cccd 11mm mrrr
+                    const direction = (opcode >> 8) & 1;
+                    const shift_type = (opcode >> 9) & 0x3;
+                    
+                    inst.mnemonic = switch (shift_type) {
+                        0 => if (direction == 1) .ASL else .ASR,
+                        1 => if (direction == 1) .LSL else .LSR,
+                        2 => if (direction == 1) .ROXL else .ROXR,
+                        3 => if (direction == 1) .ROL else .ROR,
+                        else => .UNKNOWN,
+                    };
+                    
+                    inst.data_size = .Word;
+                    const ea_mode = (opcode >> 3) & 0x7;
+                    const ea_reg = opcode & 0x7;
+                    inst.dst = decodeEA(ea_mode, @truncate(ea_reg));
+                    inst.src = .{ .Immediate8 = 1 };  // Always shift by 1 for memory
+                } else {
+                    // Register shift: 1110 cccd ss0r rrrr or 1110 cccd ss1r rrrr
+                    const direction = (opcode >> 8) & 1;
+                    const shift_type = (opcode >> 3) & 0x3;
+                    
+                    inst.mnemonic = switch (shift_type) {
+                        0 => if (direction == 1) .ASL else .ASR,
+                        1 => if (direction == 1) .LSL else .LSR,
+                        2 => if (direction == 1) .ROXL else .ROXR,
+                        3 => if (direction == 1) .ROL else .ROR,
+                        else => .UNKNOWN,
+                    };
+                    
+                    inst.data_size = switch (size_bits) {
+                        0 => .Byte,
+                        1 => .Word,
+                        2 => .Long,
+                        else => .Long,
+                    };
+                    
+                    inst.dst = .{ .DataReg = @truncate(opcode & 0x7) };
+                    
+                    if (ir == 0) {
+                        // Immediate count (3 bits, 0 means 8)
+                        var count: u8 = @truncate((opcode >> 9) & 0x7);
+                        if (count == 0) count = 8;
+                        inst.src = .{ .Immediate8 = count };
+                    } else {
+                        // Register count
+                        inst.src = .{ .DataReg = @truncate((opcode >> 9) & 0x7) };
+                    }
+                }
             },
             
             0xA, 0xF => {

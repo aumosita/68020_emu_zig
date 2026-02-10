@@ -30,6 +30,15 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     b.installArtifact(exe);
+    
+    // Shift/Rotate test executable
+    const shift_test = b.addExecutable(.{
+        .name = "m68020-emu-test-shift",
+        .root_source_file = b.path("src/test_shift.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    b.installArtifact(shift_test);
 
     // Run step
     const run_cmd = b.addRunArtifact(exe);
@@ -39,6 +48,12 @@ pub fn build(b: *std.Build) void {
     }
     const run_step = b.step("run", "Run the test executable");
     run_step.dependOn(&run_cmd.step);
+    
+    // Run shift test step
+    const run_shift = b.addRunArtifact(shift_test);
+    run_shift.step.dependOn(b.getInstallStep());
+    const run_shift_step = b.step("test-shift", "Run shift/rotate tests");
+    run_shift_step.dependOn(&run_shift.step);
 
     // Unit tests
     const lib_unit_tests = b.addTest(.{
