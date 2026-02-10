@@ -263,17 +263,22 @@ pub const Decoder = struct {
                 // ADDQ, SUBQ, Scc, DBcc
                 const mode = (opcode >> 3) & 0x7;
                 const reg = opcode & 0x7;
+                const size_bits = (opcode >> 6) & 0x3;
                 
-                if (mode == 0x1) {
+                // DBcc: 0101 cccc 11001 rrr (bits 7-3 must be 11001)
+                if ((opcode & 0x00F8) == 0x00C8) {
                     // DBcc
                     inst.mnemonic = .DBcc;
                     inst.dst = .{ .DataReg = @truncate(reg) };
+                } else if (size_bits == 0x3) {
+                    // Scc: 0101 cccc 11 mmmrrr (size bits = 11)
+                    inst.mnemonic = .Scc;
                 } else {
+                    // ADDQ/SUBQ
                     const is_sub = ((opcode >> 8) & 1) == 1;
                     inst.mnemonic = if (is_sub) .SUBQ else .ADDQ;
                     
                     // Data size
-                    const size_bits = (opcode >> 6) & 0x3;
                     inst.data_size = switch (size_bits) {
                         0 => .Byte,
                         1 => .Word,
