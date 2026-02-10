@@ -17,6 +17,11 @@ pub const M68k = struct {
     // 상태 레지스터
     sr: u16,
     
+    // 68020 전용 레지스터
+    vbr: u32,  // Vector Base Register
+    cacr: u32, // Cache Control Register
+    caar: u32, // Cache Address Register
+    
     // 메모리 서브시스템
     memory: memory.Memory,
     
@@ -42,6 +47,9 @@ pub const M68k = struct {
             .a = [_]u32{0} ** 8,
             .pc = 0,
             .sr = 0x2700, // 슈퍼바이저 모드, 인터럽트 비활성화
+            .vbr = 0,     // VBR 초기값 0 (68000 호환)
+            .cacr = 0,    // 캐시 비활성화
+            .caar = 0,
             .memory = memory.Memory.initWithConfig(allocator, config),
             .decoder = decoder.Decoder.init(),
             .executor = executor.Executor.init(),
@@ -59,16 +67,24 @@ pub const M68k = struct {
         for (&self.d) |*reg| reg.* = 0;
         for (&self.a) |*reg| reg.* = 0;
         
-        // 0x000000에서 초기 SSP 읽기
-        self.a[7] = self.memory.read32(0x000000) catch 0;
+        // VBR 사용하여 예외 벡터 읽기
+        // 0x000000(VBR+0)에서 초기 SSP 읽기
+        self.a[7] = self.memory.read32(self.getExceptionVector(0)) catch 0;
         
-        // 0x000004에서 초기 PC 읽기
-        self.pc = self.memory.read32(0x000004) catch 0;
+        // 0x000004(VBR+4)에서 초기 PC 읽기
+        self.pc = self.memory.read32(self.getExceptionVector(1)) catch 0;
         
         // 슈퍼바이저 모드 설정, 인터럽트 비활성화
         self.sr = 0x2700;
         
         self.cycles = 0;
+        
+        // VBR은 리셋해도 보존됨 (68020 사양)
+    }
+    
+    // 68020: 예외 벡터 주소 계산 (VBR 기반)
+    pub fn getExceptionVector(self: *const M68k, vector_number: u8) u32 {
+        return self.vbr + (@as(u32, vector_number) * 4);
     }
     
     pub fn step(self: *M68k) !u32 {
@@ -160,4 +176,38 @@ test "M68k custom memory size" {
     defer m68k.deinit();
     
     try std.testing.expectEqual(@as(u32, 1024 * 1024), m68k.memory.size);
+}
+
+test "M68k 68020 registers initialization" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+    
+    // VBR, CACR, CAAR 초기값 확인
+    try std.testing.expectEqual(@as(u32, 0), m68k.vbr);
+    try std.testing.expectEqual(@as(u32, 0), m68k.cacr);
+    try std.testing.expectEqual(@as(u32, 0), m68k.caar);
+}
+
+test "M68k VBR exception vector calculation" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+    
+    // VBR = 0 (기본값, 68000 호환)
+    try std.testing.expectEqual(@as(u32, 0x0000), m68k.getExceptionVector(0));  // Reset SSP
+    try std.testing.expectEqual(@as(u32, 0x0004), m68k.getExceptionVector(1));  // Reset PC
+    try std.testing.expectEqual(@as(u32, 0x0008), m68k.getExceptionVector(2));  // Bus Error
+    try std.testing.expectEqual(@as(u32, 0x0018), m68k.getExceptionVector(6));  // CHK
+    
+    // VBR 변경 (68020 기능)
+    m68k.vbr = 0x10000;
+    try std.testing.expectEqual(@as(u32, 0x10000), m68k.getExceptionVector(0));
+    try std.testing.expectEqual(@as(u32, 0x10004), m68k.getExceptionVector(1));
+    try std.testing.expectEqual(@as(u32, 0x10008), m68k.getExceptionVector(2));
+    
+    // VBR 최대값 테스트
+    m68k.vbr = 0xFF000000;
+    try std.testing.expectEqual(@as(u32, 0xFF000000), m68k.getExceptionVector(0));
+    try std.testing.expectEqual(@as(u32, 0xFF0000FC), m68k.getExceptionVector(63));
 }
