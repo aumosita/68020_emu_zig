@@ -117,10 +117,10 @@ pub const Decoder = struct {
         switch (high4) {
             0x0 => {
                 // Bit manipulation, MOVEP, immediate operations
-                const bits_8_6 = (opcode >> 6) & 0x7;
                 
-                if (bits_8_6 == 0x1) {
-                    // Bit operations
+                if ((opcode & 0xF1C0) == 0x0100 or (opcode & 0xF1C0) == 0x0140 or (opcode & 0xF1C0) == 0x0180 or (opcode & 0xF1C0) == 0x01C0) {
+                    // Bit operations with register: 0000 rrr 1tt bbb eee
+                    // tt: 00=BTST, 01=BCHG, 10=BCLR, 11=BSET
                     const bit_op = (opcode >> 6) & 0x3;
                     inst.mnemonic = switch (bit_op) {
                         0 => .BTST,
@@ -129,6 +129,34 @@ pub const Decoder = struct {
                         3 => .BSET,
                         else => .UNKNOWN,
                     };
+                    
+                    // Source: bit number from data register
+                    inst.src = .{ .DataReg = @truncate((opcode >> 9) & 0x7) };
+                    
+                    // Destination: EA
+                    const ea_mode = (opcode >> 3) & 0x7;
+                    const ea_reg = opcode & 0x7;
+                    inst.dst = decodeEA(ea_mode, @truncate(ea_reg));
+                    
+                } else if ((opcode & 0xFFC0) == 0x0800 or (opcode & 0xFFC0) == 0x0840 or (opcode & 0xFFC0) == 0x0880 or (opcode & 0xFFC0) == 0x08C0) {
+                    // Bit operations with immediate: 0000 1000 tt bbb eee, extension word = bit number
+                    const bit_op = (opcode >> 6) & 0x3;
+                    inst.mnemonic = switch (bit_op) {
+                        0 => .BTST,
+                        1 => .BCHG,
+                        2 => .BCLR,
+                        3 => .BSET,
+                        else => .UNKNOWN,
+                    };
+                    
+                    // Source: immediate bit number (will be read from extension word)
+                    inst.src = .{ .Immediate8 = 0 };
+                    
+                    // Destination: EA
+                    const ea_mode = (opcode >> 3) & 0x7;
+                    const ea_reg = opcode & 0x7;
+                    inst.dst = decodeEA(ea_mode, @truncate(ea_reg));
+                    
                 } else if ((opcode & 0xFF00) == 0x0000 or (opcode & 0xFF00) == 0x0200 or (opcode & 0xFF00) == 0x0400 or (opcode & 0xFF00) == 0x0600 or (opcode & 0xFF00) == 0x0A00 or (opcode & 0xFF00) == 0x0C00) {
                     // ORI, ANDI, SUBI, ADDI, EORI, CMPI to various destinations
                     const subop = (opcode >> 9) & 0x7;

@@ -72,6 +72,11 @@ pub const Executor = struct {
             .ROXL => return try executeRoxl(m68k, inst),
             .ROXR => return try executeRoxr(m68k, inst),
             
+            .BTST => return try executeBtst(m68k, inst),
+            .BSET => return try executeBset(m68k, inst),
+            .BCLR => return try executeBclr(m68k, inst),
+            .BCHG => return try executeBchg(m68k, inst),
+            
             .ILLEGAL => return error.IllegalInstruction,
             else => {
                 m68k.pc += 2;
@@ -1123,6 +1128,98 @@ fn getShiftCount(m68k: *cpu.M68k, src: decoder.Operand) !u32 {
         .Immediate8 => |v| @as(u32, v & 0x3F),  // Modulo 64
         .DataReg => |reg| m68k.d[reg] & 0x3F,
         else => 0,
+    };
+}
+
+// ============================================================================
+// Bit operations
+// ============================================================================
+
+fn executeBtst(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    const bit_num = try getBitNumber(m68k, inst.src, inst.dst);
+    const value = try getOperandValue(m68k, inst.dst, .Long);
+    
+    const bit_set = (value & (@as(u32, 1) << @intCast(bit_num))) != 0;
+    m68k.setFlag(cpu.M68k.FLAG_Z, !bit_set);
+    
+    // PC increment depends on whether immediate or register
+    const pc_inc: u32 = switch (inst.src) {
+        .Immediate8 => 4, // opcode + extension word
+        else => 2,
+    };
+    m68k.pc += pc_inc;
+    return 4;
+}
+
+fn executeBset(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    const bit_num = try getBitNumber(m68k, inst.src, inst.dst);
+    var value = try getOperandValue(m68k, inst.dst, .Long);
+    
+    const bit_set = (value & (@as(u32, 1) << @intCast(bit_num))) != 0;
+    m68k.setFlag(cpu.M68k.FLAG_Z, !bit_set);
+    
+    value |= (@as(u32, 1) << @intCast(bit_num));
+    try setOperandValue(m68k, inst.dst, value, .Long);
+    
+    const pc_inc: u32 = switch (inst.src) {
+        .Immediate8 => 4,
+        else => 2,
+    };
+    m68k.pc += pc_inc;
+    return 8;
+}
+
+fn executeBclr(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    const bit_num = try getBitNumber(m68k, inst.src, inst.dst);
+    var value = try getOperandValue(m68k, inst.dst, .Long);
+    
+    const bit_set = (value & (@as(u32, 1) << @intCast(bit_num))) != 0;
+    m68k.setFlag(cpu.M68k.FLAG_Z, !bit_set);
+    
+    value &= ~(@as(u32, 1) << @intCast(bit_num));
+    try setOperandValue(m68k, inst.dst, value, .Long);
+    
+    const pc_inc: u32 = switch (inst.src) {
+        .Immediate8 => 4,
+        else => 2,
+    };
+    m68k.pc += pc_inc;
+    return 8;
+}
+
+fn executeBchg(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    const bit_num = try getBitNumber(m68k, inst.src, inst.dst);
+    var value = try getOperandValue(m68k, inst.dst, .Long);
+    
+    const bit_set = (value & (@as(u32, 1) << @intCast(bit_num))) != 0;
+    m68k.setFlag(cpu.M68k.FLAG_Z, !bit_set);
+    
+    value ^= (@as(u32, 1) << @intCast(bit_num));
+    try setOperandValue(m68k, inst.dst, value, .Long);
+    
+    const pc_inc: u32 = switch (inst.src) {
+        .Immediate8 => 4,
+        else => 2,
+    };
+    m68k.pc += pc_inc;
+    return 8;
+}
+
+fn getBitNumber(m68k: *cpu.M68k, src: decoder.Operand, dst: decoder.Operand) !u32 {
+    const bit_num_raw = switch (src) {
+        .Immediate8 => blk: {
+            // Read extension word for immediate bit number
+            const ext_word = try m68k.memory.read16(m68k.pc + 2);
+            break :blk @as(u32, ext_word);
+        },
+        .DataReg => |reg| m68k.d[reg],
+        else => return error.InvalidOperand,
+    };
+    
+    // Bit number modulo 32 for registers, modulo 8 for memory
+    return switch (dst) {
+        .DataReg => bit_num_raw & 31,
+        else => bit_num_raw & 7,
     };
 }
 

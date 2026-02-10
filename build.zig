@@ -39,6 +39,15 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     b.installArtifact(shift_test);
+    
+    // Bit operations test executable
+    const bits_test = b.addExecutable(.{
+        .name = "m68020-emu-test-bits",
+        .root_source_file = b.path("src/test_bits.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    b.installArtifact(bits_test);
 
     // Run step
     const run_cmd = b.addRunArtifact(exe);
@@ -54,6 +63,12 @@ pub fn build(b: *std.Build) void {
     run_shift.step.dependOn(b.getInstallStep());
     const run_shift_step = b.step("test-shift", "Run shift/rotate tests");
     run_shift_step.dependOn(&run_shift.step);
+    
+    // Run bits test step
+    const run_bits = b.addRunArtifact(bits_test);
+    run_bits.step.dependOn(b.getInstallStep());
+    const run_bits_step = b.step("test-bits", "Run bit operation tests");
+    run_bits_step.dependOn(&run_bits.step);
 
     // Unit tests
     const lib_unit_tests = b.addTest(.{
