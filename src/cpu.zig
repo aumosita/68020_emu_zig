@@ -884,6 +884,50 @@ test "M68k pipeline mode flag supports off approx detailed states" {
     try std.testing.expectEqual(M68k.PipelineMode.detailed, m68k.getPipelineMode());
 }
 
+test "M68k pipeline approx mode adds branch flush penalty on taken branch" {
+    const allocator = std.testing.allocator;
+
+    var m68k_off = M68k.init(allocator);
+    defer m68k_off.deinit();
+    try m68k_off.memory.write16(0x1000, 0x6002); // BRA +2
+    try m68k_off.memory.write16(0x1002, 0x4E71); // skipped NOP
+    m68k_off.pc = 0x1000;
+    const off_cycles = try m68k_off.step();
+    try std.testing.expectEqual(@as(u32, 10), off_cycles);
+
+    var m68k_approx = M68k.init(allocator);
+    defer m68k_approx.deinit();
+    m68k_approx.setPipelineMode(.approx);
+    try m68k_approx.memory.write16(0x1000, 0x6002); // BRA +2
+    try m68k_approx.memory.write16(0x1002, 0x4E71);
+    m68k_approx.pc = 0x1000;
+    const approx_cycles = try m68k_approx.step();
+    try std.testing.expectEqual(@as(u32, 12), approx_cycles);
+}
+
+test "M68k pipeline approx mode applies EA-write overlap discount on memory destination write" {
+    const allocator = std.testing.allocator;
+
+    var m68k_off = M68k.init(allocator);
+    defer m68k_off.deinit();
+    m68k_off.d[0] = 0x12345678;
+    m68k_off.a[0] = 0x2000;
+    try m68k_off.memory.write16(0x1100, 0x2080); // MOVE.L D0,(A0)
+    m68k_off.pc = 0x1100;
+    const off_cycles = try m68k_off.step();
+    try std.testing.expectEqual(@as(u32, 6), off_cycles);
+
+    var m68k_approx = M68k.init(allocator);
+    defer m68k_approx.deinit();
+    m68k_approx.setPipelineMode(.approx);
+    m68k_approx.d[0] = 0x12345678;
+    m68k_approx.a[0] = 0x2000;
+    try m68k_approx.memory.write16(0x1100, 0x2080); // MOVE.L D0,(A0)
+    m68k_approx.pc = 0x1100;
+    const approx_cycles = try m68k_approx.step();
+    try std.testing.expectEqual(@as(u32, 5), approx_cycles);
+}
+
 test "M68k instruction cache fill is longword aligned" {
     const allocator = std.testing.allocator;
     var m68k = M68k.initWithConfig(allocator, .{ .size = 64 * 1024 * 1024 });

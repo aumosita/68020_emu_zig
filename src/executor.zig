@@ -115,7 +115,8 @@ fn executeMoveq(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
 fn executeMove(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const v = try getOperandValue(m, i.src, i.data_size);
     try setOperandValue(m, i.dst, v, i.data_size); m.setFlags(v, i.data_size); m.pc += i.size;
-    return 4 + getEACycles(i.src, i.data_size, true) + getEACycles(i.dst, i.data_size, false);
+    const base = 4 + getEACycles(i.src, i.data_size, true) + getEACycles(i.dst, i.data_size, false);
+    return applyPipelineEaWriteOverlap(m, i.dst, base);
 }
 fn executeMovea(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const r = switch (i.dst) { .AddrReg => |v| v, else => return error.Err };
@@ -135,7 +136,9 @@ fn executeAdd(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
         const d = try getOperandValue(m, i.dst, i.data_size);
         const res = d +% s; try setOperandValue(m, i.dst, res, i.data_size); setArithmeticFlags(m, d, s, res, i.data_size, false);
     }
-    m.pc += i.size; return 4 + getEACycles(i.src, i.data_size, true) + getEACycles(i.dst, i.data_size, false);
+    m.pc += i.size;
+    const base = 4 + getEACycles(i.src, i.data_size, true) + getEACycles(i.dst, i.data_size, false);
+    return applyPipelineEaWriteOverlap(m, i.dst, base);
 }
 fn executeAdda(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const r = switch (i.dst) { .AddrReg => |v| v, else => 0 }; var s = try getOperandValue(m, i.src, i.data_size); if (i.data_size == .Word) s = @bitCast(@as(i32, @as(i16, @bitCast(@as(u16, @truncate(s))))));
@@ -157,7 +160,9 @@ fn executeSub(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const dir = (i.opcode >> 8) & 1;
     if (dir == 0) { const r = switch (i.dst) { .DataReg => |v| v, else => 0 }; const s = try getOperandValue(m, i.src, i.data_size); const d = getRegisterValue(m.d[r], i.data_size); const res = d -% s; setRegisterValue(&m.d[r], res, i.data_size); setArithmeticFlags(m, d, s, res, i.data_size, true); }
     else { const r = switch (i.src) { .DataReg => |v| v, else => 0 }; const s = getRegisterValue(m.d[r], i.data_size); const d = try getOperandValue(m, i.dst, i.data_size); const res = d -% s; try setOperandValue(m, i.dst, res, i.data_size); setArithmeticFlags(m, d, s, res, i.data_size, true); }
-    m.pc += i.size; return 4 + getEACycles(i.src, i.data_size, true) + getEACycles(i.dst, i.data_size, false);
+    m.pc += i.size;
+    const base = 4 + getEACycles(i.src, i.data_size, true) + getEACycles(i.dst, i.data_size, false);
+    return applyPipelineEaWriteOverlap(m, i.dst, base);
 }
 fn executeSuba(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const r = switch (i.dst) { .AddrReg => |v| v, else => 0 }; var s = try getOperandValue(m, i.src, i.data_size); if (i.data_size == .Word) s = @bitCast(@as(i32, @as(i16, @bitCast(@as(u16, @truncate(s))))));
@@ -196,7 +201,8 @@ fn executeAnd(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const dir = (i.opcode >> 8) & 1;
     if (dir == 0) { const r = switch (i.dst) { .DataReg => |v| v, else => 0 }; const s = try getOperandValue(m, i.src, i.data_size); const res = m.d[r] & s; setRegisterValue(&m.d[r], res, i.data_size); m.setFlags(res, i.data_size); }
     else { const r = switch (i.src) { .DataReg => |v| v, else => 0 }; const s = getRegisterValue(m.d[r], i.data_size); const d = try getOperandValue(m, i.dst, i.data_size); const res = s & d; try setOperandValue(m, i.dst, res, i.data_size); m.setFlags(res, i.data_size); }
-    m.pc += i.size; return 4;
+    m.pc += i.size;
+    return applyPipelineEaWriteOverlap(m, i.dst, 4);
 }
 fn executeAndi(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     if (i.opcode == 0x023C) { // ANDI to CCR
@@ -222,7 +228,8 @@ fn executeOr(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const dir = (i.opcode >> 8) & 1;
     if (dir == 0) { const r = switch (i.dst) { .DataReg => |v| v, else => 0 }; const s = try getOperandValue(m, i.src, i.data_size); const res = m.d[r] | s; setRegisterValue(&m.d[r], res, i.data_size); m.setFlags(res, i.data_size); }
     else { const r = switch (i.src) { .DataReg => |v| v, else => 0 }; const s = getRegisterValue(m.d[r], i.data_size); const d = try getOperandValue(m, i.dst, i.data_size); const res = s | d; try setOperandValue(m, i.dst, res, i.data_size); m.setFlags(res, i.data_size); }
-    m.pc += i.size; return 4;
+    m.pc += i.size;
+    return applyPipelineEaWriteOverlap(m, i.dst, 4);
 }
 fn executeOri(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     if (i.opcode == 0x003C) { // ORI to CCR
@@ -245,7 +252,7 @@ fn executeOri(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const s = try getOperandValue(m, i.src, i.data_size); const d = try getOperandValue(m, i.dst, i.data_size); const res = d | s; try setOperandValue(m, i.dst, res, i.data_size); m.setFlags(res, i.data_size); m.pc += i.size; return 8;
 }
 fn executeEor(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
-    const r = switch (i.src) { .DataReg => |v| v, else => 0 }; const d = try getOperandValue(m, i.dst, i.data_size); const res = m.d[r] ^ d; try setOperandValue(m, i.dst, res, i.data_size); m.setFlags(res, i.data_size); m.pc += i.size; return 4;
+    const r = switch (i.src) { .DataReg => |v| v, else => 0 }; const d = try getOperandValue(m, i.dst, i.data_size); const res = m.d[r] ^ d; try setOperandValue(m, i.dst, res, i.data_size); m.setFlags(res, i.data_size); m.pc += i.size; return applyPipelineEaWriteOverlap(m, i.dst, 4);
 }
 fn executeEori(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     if (i.opcode == 0x0A3C) { // EORI to CCR
@@ -412,7 +419,9 @@ fn executeLineAEmulator(m: *cpu.M68k) !u32 {
     return 34;
 }
 fn executeBra(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
-    const d = switch (i.src) { .Immediate8 => |v| @as(i32, @as(i8, @bitCast(v))), .Immediate16 => |v| @as(i32, @as(i16, @bitCast(v))), .Immediate32 => |v| @as(i32, @bitCast(v)), else => 0 }; m.pc = @bitCast(@as(i32, @bitCast(m.pc)) + 2 + d); return branchTakenCycles(i.size);
+    const d = switch (i.src) { .Immediate8 => |v| @as(i32, @as(i8, @bitCast(v))), .Immediate16 => |v| @as(i32, @as(i16, @bitCast(v))), .Immediate32 => |v| @as(i32, @bitCast(v)), else => 0 };
+    m.pc = @bitCast(@as(i32, @bitCast(m.pc)) + 2 + d);
+    return branchTakenCycles(i.size) + pipelineBranchFlushPenalty(m);
 }
 fn executeBcc(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const cond: u4 = @truncate((i.opcode >> 8) & 0xF); if (evaluateCondition(m, cond)) return try executeBra(m, i); m.pc += i.size; return branchNotTakenCycles(i.size);
@@ -1224,6 +1233,22 @@ fn branchNotTakenCycles(size: u8) u32 {
 fn bitfieldCycles(dst: decoder.Operand, writes_back: bool) u32 {
     if (!isMem(dst)) return if (writes_back) 10 else 6;
     return if (writes_back) 14 else 10;
+}
+fn pipelineBranchFlushPenalty(m: *const cpu.M68k) u32 {
+    return switch (m.getPipelineMode()) {
+        .off => 0,
+        .approx => 2,
+        .detailed => 4,
+    };
+}
+fn applyPipelineEaWriteOverlap(m: *const cpu.M68k, dst: decoder.Operand, base: u32) u32 {
+    if (!isMem(dst)) return base;
+    const overlap: u32 = switch (m.getPipelineMode()) {
+        .off => 0,
+        .approx => 1,
+        .detailed => 2,
+    };
+    return if (base > overlap) base - overlap else 0;
 }
 fn addBcd(d: u8, s: u8, x: bool) struct { result: u8, carry: bool } {
     var lo = (d & 0xF) + (s & 0xF) + (if (x) @as(u8, 1) else 0); var hi = (d >> 4) + (s >> 4); var c = false;

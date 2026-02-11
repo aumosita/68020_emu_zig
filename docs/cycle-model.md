@@ -25,6 +25,10 @@
 - (옵션) Dynamic Bus Sizing split penalty: `+N`
   - `N`은 포트 폭 분할로 발생한 추가 bus sub-access 수
   - 기본값은 비활성, `setSplitBusCyclePenaltyEnabled(true)`에서만 합산
+- (옵션) PipelineMode penalty/overlap:
+  - `approx`: taken branch flush `+2`, memory-dst write overlap `-1`
+  - `detailed`: taken branch flush `+4`, memory-dst write overlap `-2`(골격 단계)
+  - `off`는 기존 고정 사이클 경로 유지
 
 `src/executor.zig`의 대표 고정 반환:
 

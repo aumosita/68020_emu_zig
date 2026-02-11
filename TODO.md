@@ -107,11 +107,11 @@
   - ✅ 기존 경량 모델과 호환되는 옵션/마이그레이션 정책 유지
   - ✅ cache hit/miss/invalidate 회귀 + 용량/정렬 정책 문서화
 
-- 파이프라인 스톨 모델 정밀화(옵션 기반)
-  - `PipelineMode.approx`에서 분기 flush penalty와 일부 EA+write overlap 보정 추가
-  - `PipelineMode.detailed`는 상태머신 골격/계측 포인트만 우선 도입(실동작은 단계적 확장)
-  - 기능 정확도 경로(`off`)와 완전히 분리된 cycle 모델 유지
-  - 완료 기준: 모드별 cycle 회귀 테스트 + 정책 문서(`docs/cycle-model.md`) 업데이트
+- 파이프라인 스톨 모델 정밀화(옵션 기반) ✅(완료)
+  - ✅ `PipelineMode.approx`: taken branch flush penalty(`+2`) + memory-dst overlap 보정(`-1`) 반영
+  - ✅ `PipelineMode.detailed`: 초기 골격(`+4`/`-2`) 반영(세부 상태머신은 후속 단계)
+  - ✅ 기능 정확도 경로(`off`)와 분리된 cycle 모델 유지
+  - ✅ 모드별 cycle 회귀 테스트 + 정책 문서(`docs/cycle-model.md`) 업데이트
 
 ## 낮은 우선순위
 

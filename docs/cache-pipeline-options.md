@@ -31,6 +31,12 @@
 - 현재는 플래그 상태 저장/조회만 제공한다.
   - `setPipelineMode(mode)`
   - `getPipelineMode()`
+  - `approx`:
+    - taken branch에 flush penalty `+2`
+    - memory destination write에 EA/bus overlap 보정 `-1`
+  - `detailed`:
+    - taken branch flush `+4`
+    - memory destination write overlap 보정 `-2`(초기 골격)
   - C API:
     - `m68k_set_pipeline_mode`
     - `m68k_get_pipeline_mode`
