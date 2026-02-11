@@ -321,3 +321,85 @@ test "M68k EXTB.L sign extension" {
     
     try std.testing.expectEqual(@as(u32, 0x0000007F), m68k.d[3]);
 }
+
+test "M68k RTR - Return and Restore CCR" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+    
+    // 스택 설정
+    m68k.a[7] = 0x2000;
+    
+    // 스택에 CCR과 PC 저장
+    try m68k.memory.write16(0x2000, 0x001F);  // CCR: XNZVC all set
+    try m68k.memory.write32(0x2002, 0x00003000);  // Return PC
+    
+    // RTR 명령어 (0x4E77)
+    try m68k.memory.write16(0x1000, 0x4E77);
+    m68k.pc = 0x1000;
+    m68k.sr = 0x2700;  // Supervisor mode, all flags clear
+    
+    _ = try m68k.step();
+    
+    // CCR만 복원되어야 함 (하위 8비트)
+    try std.testing.expectEqual(@as(u16, 0x271F), m68k.sr);
+    try std.testing.expectEqual(@as(u32, 0x3000), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 0x2006), m68k.a[7]);
+}
+
+test "M68k RTE - Return from Exception" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+    
+    // 스택 설정
+    m68k.a[7] = 0x2000;
+    
+    // 스택에 SR과 PC 저장
+    try m68k.memory.write16(0x2000, 0x0015);  // SR: User mode, some flags
+    try m68k.memory.write32(0x2002, 0x00004000);  // Return PC
+    
+    // RTE 명령어 (0x4E73)
+    try m68k.memory.write16(0x1000, 0x4E73);
+    m68k.pc = 0x1000;
+    m68k.sr = 0x2700;  // Supervisor mode
+    
+    _ = try m68k.step();
+    
+    // SR 전체 복원
+    try std.testing.expectEqual(@as(u16, 0x0015), m68k.sr);
+    try std.testing.expectEqual(@as(u32, 0x4000), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 0x2006), m68k.a[7]);
+}
+
+test "M68k TRAP - Software Interrupt" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+    
+    // TRAP vector 설정 (TRAP #0 = vector 32)
+    const vector_addr = m68k.getExceptionVector(32);
+    try m68k.memory.write32(vector_addr, 0x00005000);  // Trap handler
+    
+    // 스택 설정
+    m68k.a[7] = 0x3000;
+    m68k.sr = 0x0000;  // User mode
+    
+    // TRAP #0 명령어 (0x4E40)
+    try m68k.memory.write16(0x1000, 0x4E40);
+    m68k.pc = 0x1000;
+    
+    _ = try m68k.step();
+    
+    // 스택에 SR과 PC 저장되어야 함
+    const saved_sr = try m68k.memory.read16(0x3000 - 6);
+    const saved_pc = try m68k.memory.read32(0x3000 - 4);
+    
+    try std.testing.expectEqual(@as(u16, 0x0000), saved_sr);
+    try std.testing.expectEqual(@as(u32, 0x1002), saved_pc);
+    try std.testing.expectEqual(@as(u32, 0x5000), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 0x3000 - 6), m68k.a[7]);
+    
+    // Supervisor 모드로 전환
+    try std.testing.expect((m68k.sr & 0x2000) != 0);
+}

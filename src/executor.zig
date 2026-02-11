@@ -59,6 +59,9 @@ pub const Executor = struct {
             .LEA => return try executeLea(m68k, inst),
             
             .RTS => return try executeRts(m68k),
+            .RTR => return try executeRtr(m68k),
+            .RTE => return try executeRte(m68k),
+            .TRAP => return try executeTrap(m68k, inst),
             .BRA => return try executeBra(m68k, inst),
             .Bcc => return try executeBcc(m68k, inst),
             .BSR => return try executeBsr(m68k, inst),
@@ -795,6 +798,67 @@ fn executeRts(m68k: *cpu.M68k) !u32 {
     m68k.pc = try m68k.memory.read32(sp);
     m68k.a[7] = sp + 4;
     return 16;
+}
+
+fn executeRtr(m68k: *cpu.M68k) !u32 {
+    // RTR: Return and Restore condition codes
+    // Stack: [CCR (word)] [PC (long)]
+    const sp = m68k.a[7];
+    
+    // CCR 복원 (하위 8비트만)
+    const ccr_word = try m68k.memory.read16(sp);
+    m68k.sr = (m68k.sr & 0xFF00) | (ccr_word & 0x00FF);
+    
+    // PC 복원
+    m68k.pc = try m68k.memory.read32(sp + 2);
+    
+    // 스택 포인터 업데이트
+    m68k.a[7] = sp + 6;
+    
+    return 20;
+}
+
+fn executeRte(m68k: *cpu.M68k) !u32 {
+    // RTE: Return from Exception
+    // Stack: [SR (word)] [PC (long)]
+    const sp = m68k.a[7];
+    
+    // SR 복원 (전체)
+    m68k.sr = try m68k.memory.read16(sp);
+    
+    // PC 복원
+    m68k.pc = try m68k.memory.read32(sp + 2);
+    
+    // 스택 포인터 업데이트
+    m68k.a[7] = sp + 6;
+    
+    return 20;
+}
+
+fn executeTrap(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // TRAP: Software interrupt
+    const vector = switch (inst.src) {
+        .Immediate8 => |v| v,
+        else => return error.InvalidOperand,
+    };
+    
+    // TRAP vector는 32-47 (0x80-0xBC)
+    const vector_number: u8 = 32 + (vector & 0xF);
+    const vector_addr = m68k.getExceptionVector(vector_number);
+    
+    // 현재 SR과 PC를 스택에 저장
+    const sp = m68k.a[7] - 6;
+    try m68k.memory.write32(sp + 2, m68k.pc + 2);
+    try m68k.memory.write16(sp, m68k.sr);
+    m68k.a[7] = sp;
+    
+    // 벡터 주소로 점프
+    m68k.pc = try m68k.memory.read32(vector_addr);
+    
+    // Supervisor 모드 설정
+    m68k.sr |= 0x2000;
+    
+    return 34;
 }
 
 fn executeBra(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
