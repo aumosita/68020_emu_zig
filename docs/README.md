@@ -36,3 +36,6 @@
 
 - `cache-pipeline-options.md`
   I-cache 통계/penalty 옵션 및 파이프라인 모드 플래그 정책
+
+- `translation-cache.md`
+  address_translator 경로용 소프트웨어 TLB 설계/무효화/검증 포인트

@@ -184,6 +184,10 @@ export fn m68k_set_spurious_irq(m68k: *cpu.M68k, level: u8) void {
     }
 }
 
+export fn m68k_invalidate_translation_cache(m68k: *cpu.M68k) void {
+    m68k.memory.invalidateTranslationCache();
+}
+
 export fn m68k_set_pmmu_compat(m68k: *cpu.M68k, enabled: bool) void {
     m68k.setPmmuCompatEnabled(enabled);
 }
@@ -423,6 +427,38 @@ test "root API status memory access surfaces error codes" {
 
     m68k.memory.enforce_alignment = true;
     try std.testing.expectEqual(@as(c_int, -2), m68k_read_memory_16_status(m68k, 0x21, &w)); // odd alignment
+}
+
+const RootTranslatorCtx = struct {
+    calls: usize = 0,
+    delta: u32 = 0,
+};
+
+fn rootCountingTranslator(ctx: ?*anyopaque, logical_addr: u32, _: memory.BusAccess) !u32 {
+    const c: *RootTranslatorCtx = @ptrCast(@alignCast(ctx.?));
+    c.calls += 1;
+    return logical_addr + c.delta;
+}
+
+test "root API can invalidate translation cache" {
+    const m68k = m68k_create_with_memory(0x8000) orelse return error.OutOfMemory;
+    defer m68k_destroy(m68k);
+
+    var ctx = RootTranslatorCtx{ .delta = 0x1000 };
+    m68k.memory.setAddressTranslator(rootCountingTranslator, &ctx);
+    try m68k.memory.write8(0x1100, 0x5A);
+    try m68k.memory.write8(0x1104, 0x5B);
+    try m68k.memory.write8(0x1108, 0x5C);
+
+    const access = memory.BusAccess{ .function_code = 0b001, .space = .Data, .is_write = false };
+    try std.testing.expectEqual(@as(u8, 0x5A), try m68k.memory.read8Bus(0x0100, access));
+    try std.testing.expectEqual(@as(usize, 1), ctx.calls);
+    try std.testing.expectEqual(@as(u8, 0x5B), try m68k.memory.read8Bus(0x0104, access));
+    try std.testing.expectEqual(@as(usize, 1), ctx.calls);
+
+    m68k_invalidate_translation_cache(m68k);
+    try std.testing.expectEqual(@as(u8, 0x5C), try m68k.memory.read8Bus(0x0108, access));
+    try std.testing.expectEqual(@as(usize, 2), ctx.calls);
 }
 
 test "root API context-based create/destroy lifecycle" {

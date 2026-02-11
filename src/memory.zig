@@ -23,10 +23,23 @@ pub const BusSignal = enum { ok, retry, halt, bus_error };
 pub const BusHook = *const fn (ctx: ?*anyopaque, logical_addr: u32, access: BusAccess) BusSignal;
 pub const AddressTranslator = *const fn (ctx: ?*anyopaque, logical_addr: u32, access: BusAccess) anyerror!u32;
 pub const PortWidth = enum(u8) { Width8 = 1, Width16 = 2, Width32 = 4 };
+const TlbEntries = 8;
+const TlbPageBits = 12;
+const TlbPageSize = @as(u32, 1) << TlbPageBits;
+const TlbPageMask = TlbPageSize - 1;
 pub const PortRegion = struct {
     start: u32,
     end_exclusive: u32,
     width: PortWidth,
+};
+
+const TlbEntry = struct {
+    valid: bool = false,
+    logical_page: u32 = 0,
+    physical_page_base: u32 = 0,
+    function_code: u3 = 0,
+    space: AccessSpace = .Data,
+    is_write: bool = false,
 };
 
 pub const Memory = struct {
@@ -41,6 +54,7 @@ pub const Memory = struct {
     default_port_width: PortWidth,
     port_regions: []PortRegion,
     split_cycle_penalty: u32,
+    tlb: [TlbEntries]TlbEntry,
     allocator: std.mem.Allocator,
     
     pub fn init(allocator: std.mem.Allocator) Memory {
@@ -61,6 +75,7 @@ pub const Memory = struct {
                 .default_port_width = config.default_port_width,
                 .port_regions = &[_]PortRegion{},
                 .split_cycle_penalty = 0,
+                .tlb = [_]TlbEntry{.{}} ** TlbEntries,
                 .allocator = allocator,
             };
         };
@@ -77,6 +92,7 @@ pub const Memory = struct {
                 .default_port_width = config.default_port_width,
                 .port_regions = &[_]PortRegion{},
                 .split_cycle_penalty = 0,
+                .tlb = [_]TlbEntry{.{}} ** TlbEntries,
                 .allocator = allocator,
             };
         };
@@ -96,6 +112,7 @@ pub const Memory = struct {
             .default_port_width = config.default_port_width,
             .port_regions = regions,
             .split_cycle_penalty = 0,
+            .tlb = [_]TlbEntry{.{}} ** TlbEntries,
             .allocator = allocator,
         };
     }
@@ -117,9 +134,43 @@ pub const Memory = struct {
     pub fn setAddressTranslator(self: *Memory, translator: ?AddressTranslator, ctx: ?*anyopaque) void {
         self.address_translator = translator;
         self.address_translator_ctx = ctx;
+        self.invalidateTranslationCache();
     }
 
-    fn resolveBusAddress(self: *const Memory, logical_addr: u32, access: BusAccess) !u32 {
+    pub fn invalidateTranslationCache(self: *Memory) void {
+        for (&self.tlb) |*entry| {
+            entry.* = .{};
+        }
+    }
+
+    fn tlbLookup(self: *const Memory, logical_addr: u32, access: BusAccess) ?u32 {
+        const logical_page = logical_addr >> TlbPageBits;
+        const index: usize = @intCast(logical_page & (TlbEntries - 1));
+        const entry = self.tlb[index];
+        if (!entry.valid) return null;
+        if (entry.logical_page != logical_page) return null;
+        if (entry.function_code != access.function_code) return null;
+        if (entry.space != access.space) return null;
+        if (entry.is_write != access.is_write) return null;
+        const page_offset = logical_addr & TlbPageMask;
+        return entry.physical_page_base +% page_offset;
+    }
+
+    fn tlbInsert(self: *Memory, logical_addr: u32, physical_addr: u32, access: BusAccess) void {
+        const logical_page = logical_addr >> TlbPageBits;
+        const page_offset = logical_addr & TlbPageMask;
+        const index: usize = @intCast(logical_page & (TlbEntries - 1));
+        self.tlb[index] = .{
+            .valid = true,
+            .logical_page = logical_page,
+            .physical_page_base = physical_addr -% page_offset,
+            .function_code = access.function_code,
+            .space = access.space,
+            .is_write = access.is_write,
+        };
+    }
+
+    fn resolveBusAddress(self: *Memory, logical_addr: u32, access: BusAccess) !u32 {
         if (self.bus_hook) |hook| {
             switch (hook(self.bus_hook_ctx, logical_addr, access)) {
                 .ok => {},
@@ -129,7 +180,12 @@ pub const Memory = struct {
             }
         }
         if (self.address_translator) |translator| {
-            return translator(self.address_translator_ctx, logical_addr, access) catch return error.BusError;
+            if (self.tlbLookup(logical_addr, access)) |translated| {
+                return translated;
+            }
+            const translated = translator(self.address_translator_ctx, logical_addr, access) catch return error.BusError;
+            self.tlbInsert(logical_addr, translated, access);
+            return translated;
         }
         return logical_addr;
     }
@@ -152,13 +208,13 @@ pub const Memory = struct {
     }
 
     fn read8BusRaw(self: *const Memory, logical_addr: u32, access: BusAccess) !u8 {
-        const addr = try self.resolveBusAddress(logical_addr, access);
+        const addr = try @constCast(self).resolveBusAddress(logical_addr, access);
         if (addr >= self.size) return error.BusError;
         return self.data[addr];
     }
 
     fn read16BusRaw(self: *const Memory, logical_addr: u32, access: BusAccess) !u16 {
-        const addr = try self.resolveBusAddress(logical_addr, access);
+        const addr = try @constCast(self).resolveBusAddress(logical_addr, access);
         if (self.enforce_alignment and (addr & 1) != 0) return error.AddressError;
         if (addr + 1 >= self.size) return error.BusError;
         const high: u16 = self.data[addr];
@@ -167,7 +223,7 @@ pub const Memory = struct {
     }
 
     fn read32BusRaw(self: *const Memory, logical_addr: u32, access: BusAccess) !u32 {
-        const addr = try self.resolveBusAddress(logical_addr, access);
+        const addr = try @constCast(self).resolveBusAddress(logical_addr, access);
         if (self.enforce_alignment and (addr & 1) != 0) return error.AddressError;
         if (addr + 3 >= self.size) return error.BusError;
         const b0: u32 = self.data[addr];
@@ -474,6 +530,17 @@ fn addTranslator(_: ?*anyopaque, logical_addr: u32, _: BusAccess) !u32 {
     return logical_addr + 0x1000;
 }
 
+const CountingTranslatorCtx = struct {
+    calls: usize = 0,
+    delta: u32 = 0,
+};
+
+fn countingTranslator(ctx: ?*anyopaque, logical_addr: u32, _: BusAccess) !u32 {
+    const c: *CountingTranslatorCtx = @ptrCast(@alignCast(ctx.?));
+    c.calls += 1;
+    return logical_addr + c.delta;
+}
+
 const BusCallRecorder = struct {
     calls: usize = 0,
     addrs: [8]u32 = [_]u32{0} ** 8,
@@ -530,6 +597,82 @@ test "Memory bus alignment violation returns address error" {
         .is_write = false,
     };
     try std.testing.expectError(error.AddressError, mem.read16Bus(0x1001, access));
+}
+
+test "Memory translation cache reduces address translator callback calls" {
+    const allocator = std.testing.allocator;
+    var ctx = CountingTranslatorCtx{ .delta = 0x1000 };
+    var mem = Memory.initWithConfig(allocator, .{
+        .size = 0x5000,
+        .address_translator = countingTranslator,
+        .address_translator_ctx = &ctx,
+    });
+    defer mem.deinit();
+
+    try mem.write8(0x1100, 0xAA);
+    try mem.write8(0x1110, 0xAB);
+    try mem.write8(0x2100, 0xBB);
+
+    const access = BusAccess{ .function_code = 0b001, .space = .Data, .is_write = false };
+
+    // First access to page 0x0: translator called.
+    try std.testing.expectEqual(@as(u8, 0xAA), try mem.read8Bus(0x0100, access));
+    // Same page: must hit TLB without translator callback.
+    try std.testing.expectEqual(@as(u8, 0xAB), try mem.read8Bus(0x0110, access));
+    // Different page: translator called again.
+    try std.testing.expectEqual(@as(u8, 0xBB), try mem.read8Bus(0x1100, access));
+
+    try std.testing.expectEqual(@as(usize, 2), ctx.calls);
+}
+
+test "Memory translation cache flush restores translator callback path" {
+    const allocator = std.testing.allocator;
+    var ctx = CountingTranslatorCtx{ .delta = 0x1000 };
+    var mem = Memory.initWithConfig(allocator, .{
+        .size = 0x5000,
+        .address_translator = countingTranslator,
+        .address_translator_ctx = &ctx,
+    });
+    defer mem.deinit();
+
+    try mem.write8(0x1100, 0xCC);
+    try mem.write8(0x1104, 0xCD);
+    try mem.write8(0x1108, 0xCE);
+
+    const access = BusAccess{ .function_code = 0b001, .space = .Data, .is_write = false };
+    try std.testing.expectEqual(@as(u8, 0xCC), try mem.read8Bus(0x0100, access));
+    try std.testing.expectEqual(@as(usize, 1), ctx.calls);
+
+    // Cached read: no additional translator callback.
+    try std.testing.expectEqual(@as(u8, 0xCD), try mem.read8Bus(0x0104, access));
+    try std.testing.expectEqual(@as(usize, 1), ctx.calls);
+
+    mem.invalidateTranslationCache();
+    try std.testing.expectEqual(@as(u8, 0xCE), try mem.read8Bus(0x0108, access));
+    try std.testing.expectEqual(@as(usize, 2), ctx.calls);
+}
+
+test "Memory setAddressTranslator invalidates translation cache and uses new mapping" {
+    const allocator = std.testing.allocator;
+    var ctx = CountingTranslatorCtx{ .delta = 0x1000 };
+    var mem = Memory.initWithConfig(allocator, .{
+        .size = 0x6000,
+        .address_translator = countingTranslator,
+        .address_translator_ctx = &ctx,
+    });
+    defer mem.deinit();
+
+    try mem.write8(0x1100, 0x11);
+    try mem.write8(0x2100, 0x22);
+
+    const access = BusAccess{ .function_code = 0b001, .space = .Data, .is_write = false };
+    try std.testing.expectEqual(@as(u8, 0x11), try mem.read8Bus(0x0100, access));
+    try std.testing.expectEqual(@as(usize, 1), ctx.calls);
+
+    ctx.delta = 0x2000;
+    mem.setAddressTranslator(countingTranslator, &ctx);
+    try std.testing.expectEqual(@as(u8, 0x22), try mem.read8Bus(0x0100, access));
+    try std.testing.expectEqual(@as(usize, 2), ctx.calls);
 }
 
 test "Memory dynamic bus sizing splits read access by port width" {
