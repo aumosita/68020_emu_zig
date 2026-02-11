@@ -42,13 +42,10 @@
 ## 높은 우선순위
 
 - 스택 포인터 모델 세부 규칙 완성 ✅(완료)
-  - 후속 유지보수: 예외 프레임 정확도 보강 시 stack/frame 상호영향 회귀 유지
 
 - 예외 프레임 정확도 2차 보강 ✅(완료)
-  - 후속 유지보수: Format B 및 드문 fault subtype 세분 필드 검증 확장
 
 - `root.zig` 외부 API 검증 확대 ✅(완료)
-  - 후속 유지보수: C API 에러 코드형 ABI(v2) 추가 시 동일 시나리오를 새 API로 병행 검증
 
 - C API 에러 가시성/안전성 강화 ✅(완료)
   - ✅ status code + out-parameter 기반 메모리 접근 API 추가(`*_status`)
@@ -57,10 +54,8 @@
   - ✅ context 주입 생성/파괴 API 추가(allocator 도메인 분리)
   - ✅ 구 API(`m68k_read/write_memory_*`) deprecate/권장 경로 README 문서화
   - ✅ 외부 allocator callback 주입 API 추가
-  - 후속(선택): 구 API 제거 시기/버전 정책 확정
 
 - 불법 인코딩/확장 워드 예외 커버리지 확장 ✅(완료)
-  - 후속 유지보수: bitfield 희소 인코딩 및 외부 validation vector와의 교차검증
 
 ## 중간 우선순위
 
@@ -77,17 +72,15 @@
   - 진행: `CHK2/CMP2/CALLM-RTM/TAS/MUL*_L/DIV*_L` cycle assertion 회귀 추가
   - 진행: `PACK/UNPK/MOVEC/ComplexEA/extended-EA/memory shift` cycle assertion 회귀 추가
   - ✅ 핵심 명령 cycle 회귀 테스트 범위 확장 완료
-  - 후속 유지보수: 신규 명령/사이클 정책 변경 시 해당 테스트의 고정 cycle assertion 동반 갱신
 
 - `MOVEM` 비용 모델 세분화 ✅(완료)
   - 레지스터 개수, 방향(mem->reg/reg->mem), predecrement/postincrement 별 비용 반영
   - word/long 전송 폭 차등 반영
   - 6개 모드 조합 cycle 테스트 통과
 
-- 코프로세서 호환 레이어 정리
-  - coprocessor handler 계약(입력 opcode/PC, 반환 semantics)을 문서화
-  - 핸들러 부재/거부/fault 반환의 표준 동작을 고정
-  - 완료 기준: 문서 + 샘플 핸들러 테스트 케이스 유지
+- 코프로세서 호환 레이어 정리 ✅(완료)
+  - ✅ coprocessor handler 계약(입력 opcode/PC, 반환 semantics) 문서화(`docs/coprocessor-handler.md`)
+  - ✅ 핸들러 부재/거부/fault 반환의 표준 동작 고정 + 회귀 테스트 반영
 
 - 버스 추상화 고도화
   - FC 기반 접근 정책(사용자/슈퍼바이저 + 프로그램/데이터) 테스트 강화
@@ -133,3 +126,13 @@
   - 외부 68k validation vectors(JSON/바이너리)를 로드하는 테스트 러너 추가
   - 희소 인코딩(bitfield/packed decimal/exception return PC) 중심 우선 연동
   - 완료 기준: CI에서 외부 벡터 subset 자동 실행
+
+## 후속 유지보수 모음
+
+- 예외 프레임 정확도 보강 시 stack/frame 상호영향 회귀 유지
+- Format B 및 드문 fault subtype 세분 필드 검증 확장
+- C API 에러 코드형 ABI(v2) 추가 시 동일 시나리오를 새 API로 병행 검증
+- 구 API 제거 시기/버전 정책 확정(선택)
+- bitfield 희소 인코딩 및 외부 validation vector와의 교차검증
+- 신규 명령/사이클 정책 변경 시 고정 cycle assertion 테스트 동반 갱신
+- 핸들러 반환 타입 확장 시 코프로세서 계약 문서/회귀 동시 갱신

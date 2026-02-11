@@ -27,3 +27,6 @@
 
 - `cycle-model.md`
   사이클 정책(고정/검증됨 vs 근사)과 회귀 기준
+
+- `coprocessor-handler.md`
+  코프로세서 핸들러 계약(handled/unavailable/fault)과 회귀 기준

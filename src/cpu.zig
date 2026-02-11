@@ -557,6 +557,8 @@ pub const M68k = struct {
 const CoprocTestContext = struct {
     called: bool = false,
     emulate_unavailable: bool = false,
+    emulate_fault: bool = false,
+    fault_addr: u32 = 0,
 };
 
 const BkptTestContext = struct {
@@ -569,6 +571,7 @@ fn coprocTestHandler(ctx: ?*anyopaque, m68k: *M68k, opcode: u16, _: u32) M68k.Co
     const typed: *CoprocTestContext = @ptrCast(@alignCast(ctx.?));
     typed.called = true;
     if (typed.emulate_unavailable) return .{ .unavailable = {} };
+    if (typed.emulate_fault) return .{ .fault = typed.fault_addr };
 
     // Minimal software-FPU demonstration: F-line opcode writes 1.0f to D0.
     if ((opcode & 0xF000) == 0xF000) {
@@ -1745,6 +1748,30 @@ test "M68k coprocessor handler may defer to unavailable vector 11" {
     try std.testing.expect(ctx.called);
     try std.testing.expectEqual(@as(u32, 34), cycles);
     try std.testing.expectEqual(@as(u32, 0x5A80), m68k.pc);
+}
+
+test "M68k coprocessor handler fault routes to vector 2 format A bus error frame" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    var ctx = CoprocTestContext{ .emulate_fault = true, .fault_addr = 0x00A01234 };
+    m68k.setCoprocessorHandler(coprocTestHandler, &ctx);
+    try m68k.memory.write32(m68k.getExceptionVector(2), 0x5AC0);
+    try m68k.memory.write16(0x1530, 0xF240);
+
+    m68k.pc = 0x1530;
+    m68k.a[7] = 0x3720;
+    m68k.setSR(0x0000); // user mode
+
+    const cycles = try m68k.step();
+    try std.testing.expect(ctx.called);
+    try std.testing.expectEqual(@as(u32, 50), cycles);
+    try std.testing.expectEqual(@as(u32, 0x5AC0), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 0x3708), m68k.a[7]);
+    try std.testing.expectEqual(@as(u16, 0xA008), try m68k.memory.read16(0x370E)); // vector 2 in format A
+    try std.testing.expectEqual(@as(u32, 0x00A01234), try m68k.memory.read32(0x3710)); // precise fault address
+    try std.testing.expectEqual(@as(u16, 0x5000), try m68k.memory.read16(0x3714)); // program read FC captured in frame
 }
 
 test "M68k UNKNOWN opcode enters illegal instruction exception" {
