@@ -67,13 +67,13 @@
 - 사이클 모델 정리(기능 정확도 유지, 선택적 정밀화) 🚧(진행중)
   - ✅ 현재 고정 사이클 반환 경로 문서화(`docs/cycle-model.md`)
   - ✅ `README.md`에 "근사/검증됨" 표기 규칙 반영
-  - 잔여: 주소 지정 모드 영향이 큰 명령(`MOVEM`, 분기/예외, bitfield) 정밀화
+  - 진행: `MOVEM` 비용 모델/회귀 반영 완료, 분기/예외/bitfield 정밀화 잔여
   - 잔여: 핵심 명령 cycle 회귀 테스트 범위 확장
 
-- `MOVEM` 비용 모델 세분화
+- `MOVEM` 비용 모델 세분화 ✅(완료)
   - 레지스터 개수, 방향(mem->reg/reg->mem), predecrement/postincrement 별 비용 반영
   - word/long 전송 폭 차등 반영
-  - 완료 기준: 최소 6개 모드 조합 cycle 테스트 통과
+  - 6개 모드 조합 cycle 테스트 통과
 
 - 코프로세서 호환 레이어 정리
   - coprocessor handler 계약(입력 opcode/PC, 반환 semantics)을 문서화

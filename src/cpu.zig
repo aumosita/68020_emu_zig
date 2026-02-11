@@ -2551,6 +2551,62 @@ test "M68k MOVEM updates addressing mode semantics correctly" {
     try std.testing.expectEqual(@as(u32, 0xDEADBEEF), try m68k.memory.read32(0x3210));
 }
 
+test "M68k MOVEM cycle model covers register count direction size and addressing mode" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    // 1) reg->mem, long, predecrement, 2 regs: 8 + (8*2) + 2 = 26
+    try m68k.memory.write16(0xEA00, 0x48E0); // MOVEM.L <mask>,-(A0)
+    try m68k.memory.write16(0xEA02, 0x0003); // D0-D1
+    m68k.pc = 0xEA00;
+    m68k.a[0] = 0x6008;
+    m68k.d[0] = 0x11111111;
+    m68k.d[1] = 0x22222222;
+    try std.testing.expectEqual(@as(u32, 26), try m68k.step());
+
+    // 2) reg->mem, long, predecrement, 3 regs: 8 + (8*3) + 2 = 34
+    try m68k.memory.write16(0xEA10, 0x48E0);
+    try m68k.memory.write16(0xEA12, 0x0007); // D0-D2
+    m68k.pc = 0xEA10;
+    m68k.a[0] = 0x610C;
+    try std.testing.expectEqual(@as(u32, 34), try m68k.step());
+
+    // 3) reg->mem, word, (A1), 2 regs: 8 + (4*2) + 0 = 16
+    try m68k.memory.write16(0xEA20, 0x4891); // MOVEM.W <mask>,(A1)
+    try m68k.memory.write16(0xEA22, 0x0003); // D0-D1
+    m68k.pc = 0xEA20;
+    m68k.a[1] = 0x6200;
+    try std.testing.expectEqual(@as(u32, 16), try m68k.step());
+
+    // 4) mem->reg, word, postincrement, 2 regs: 8 + (5*2) + 2 = 20
+    try m68k.memory.write16(0xEA30, 0x4C99); // MOVEM.W (A1)+,<mask>
+    try m68k.memory.write16(0xEA32, 0x000C); // D2-D3
+    try m68k.memory.write16(0x6300, 0xFFFE);
+    try m68k.memory.write16(0x6302, 0x0001);
+    m68k.pc = 0xEA30;
+    m68k.a[1] = 0x6300;
+    try std.testing.expectEqual(@as(u32, 20), try m68k.step());
+
+    // 5) mem->reg, long, postincrement, 2 regs: 8 + (9*2) + 2 = 28
+    try m68k.memory.write16(0xEA40, 0x4CD9); // MOVEM.L (A1)+,<mask>
+    try m68k.memory.write16(0xEA42, 0x0030); // D4-D5
+    try m68k.memory.write32(0x6400, 0xAAAABBBB);
+    try m68k.memory.write32(0x6404, 0xCCCCDDDD);
+    m68k.pc = 0xEA40;
+    m68k.a[1] = 0x6400;
+    try std.testing.expectEqual(@as(u32, 28), try m68k.step());
+
+    // 6) reg->mem, long, d16(A2), 1 reg: 8 + (8*1) + 2 = 18
+    try m68k.memory.write16(0xEA50, 0x48EA); // MOVEM.L <mask>,(d16,A2)
+    try m68k.memory.write16(0xEA52, 0x0001); // D0
+    try m68k.memory.write16(0xEA54, 0x0010);
+    m68k.pc = 0xEA50;
+    m68k.a[2] = 0x6500;
+    m68k.d[0] = 0xDEADBEEF;
+    try std.testing.expectEqual(@as(u32, 18), try m68k.step());
+}
+
 test "M68k extended-EA instructions advance PC by decoded size" {
     const allocator = std.testing.allocator;
     var m68k = M68k.init(allocator);

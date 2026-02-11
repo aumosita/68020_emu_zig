@@ -518,6 +518,7 @@ fn executeMovem(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const mask = switch (i.src) { .Immediate16 => |v| v, else => 0 };
     const dir = (i.opcode >> 10) & 1;
     const size_bytes: u32 = if (i.data_size == .Word) 2 else 4;
+    const reg_count: u32 = @intCast(@popCount(mask));
 
     if (dir == 0) {
         switch (i.dst) {
@@ -586,7 +587,23 @@ fn executeMovem(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
         }
     }
     m.pc += i.size;
-    return 8;
+    return movemCycleCost(i.data_size, dir == 1, i.dst, reg_count);
+}
+fn movemModePenalty(op: decoder.Operand) u32 {
+    return switch (op) {
+        .AddrPreDec, .AddrPostInc, .Address, .AddrDisplace => 2,
+        .ComplexEA => 4,
+        else => 0,
+    };
+}
+fn movemCycleCost(size: decoder.DataSize, mem_to_reg: bool, dst: decoder.Operand, reg_count: u32) u32 {
+    const base: u32 = 8;
+    const per_reg: u32 = switch (size) {
+        .Word => if (mem_to_reg) 5 else 4,
+        .Long => if (mem_to_reg) 9 else 8,
+        else => 4,
+    };
+    return base + (per_reg * reg_count) + movemModePenalty(dst);
 }
 fn executeExg(m: *cpu.M68k, i: *const decoder.Instruction) !u32 { const rx = (i.opcode >> 9) & 7; const ry = i.opcode & 7; const mode = (i.opcode >> 3) & 0x1F; if (mode == 8) { const tmp = m.d[rx]; m.d[rx] = m.d[ry]; m.d[ry] = tmp; } else if (mode == 9) { const tmp = m.a[rx]; m.a[rx] = m.a[ry]; m.a[ry] = tmp; } else { const tmp = m.d[rx]; m.d[rx] = m.a[ry]; m.a[ry] = tmp; } m.pc += i.size; return 6; }
 fn executeChk(m: *cpu.M68k, i: *const decoder.Instruction) !u32 { const r = switch (i.dst) { .DataReg => |v| v, else => 0 }; const b = try getOperandValue(m, i.src, .Word); const v = m.d[r] & 0xFFFF; if (v > b or (v & 0x8000) != 0) { try m.enterException(6, m.pc + i.size, 0, null); return 44; } m.pc += i.size; return 10; }
