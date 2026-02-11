@@ -107,11 +107,11 @@
   - ✅ 실제 페이지 워크 없이도 OS probe가 즉시 실패하지 않는 호환 레이어(옵션 플래그 기반) 추가
   - ✅ 옵션 플래그 기반 최소 동작 명세서 작성(`docs/pmmu-ready.md`)
 
-- 캐시/파이프라인 옵션 고도화(비기본)
-  - 현재 I-cache 경량 모델의 통계(hit/miss 카운터) 노출
-  - 필요 시 fetch penalty를 옵션 값으로 조정 가능하게 확장
-  - 파이프라인(full detail) 모델은 범위가 커서 보류, 필요 시 단계형(`off/approx/detailed`) 옵션으로 별도 트랙 진행
-  - 완료 기준: 기능 플래그 + 문서화
+- 캐시/파이프라인 옵션 고도화(비기본) ✅(완료)
+  - ✅ I-cache 경량 모델 통계(hit/miss 카운터) 노출(`getICacheStats`, root API getter)
+  - ✅ fetch miss penalty 옵션 조정 경로 추가(`setICacheFetchMissPenalty`)
+  - ✅ 파이프라인 모드 플래그(`off/approx/detailed`) 추가(동작 확장 포인트 예약)
+  - ✅ 기능 플래그 + 문서화 반영
 
 - 플랫폼 주변장치/PIC 레이어 준비
   - CPU 외부 모듈로 PIC(priority encoder), timer tick, 최소 UART 스텁 설계

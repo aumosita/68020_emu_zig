@@ -33,3 +33,6 @@
 
 - `pmmu-ready.md`
   PMMU-ready 최소 호환 레이어(옵션 플래그, 현재 범위, 확장 계획)
+
+- `cache-pipeline-options.md`
+  I-cache 통계/penalty 옵션 및 파이프라인 모드 플래그 정책

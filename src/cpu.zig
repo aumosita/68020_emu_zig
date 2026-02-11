@@ -6,6 +6,8 @@ const executor = @import("executor.zig");
 pub const M68k = struct {
     const ICacheLines = 64;
     const ICacheLine = struct { valid: bool, tag: u32, data: u32 };
+    pub const ICacheStats = struct { hits: u64, misses: u64 };
+    pub const PipelineMode = enum(u8) { off = 0, approx = 1, detailed = 2 };
     pub const CoprocessorResult = union(enum) {
         handled: u32,
         unavailable: void,
@@ -47,6 +49,10 @@ pub const M68k = struct {
     last_data_access_addr: u32,
     last_data_access_is_write: bool,
     split_bus_cycle_penalty_enabled: bool,
+    icache_fetch_miss_penalty: u32,
+    icache_hit_count: u64,
+    icache_miss_count: u64,
+    pipeline_mode: PipelineMode,
     allocator: std.mem.Allocator,
     
     pub fn init(allocator: std.mem.Allocator) M68k {
@@ -84,6 +90,10 @@ pub const M68k = struct {
             .last_data_access_addr = 0,
             .last_data_access_is_write = false,
             .split_bus_cycle_penalty_enabled = false,
+            .icache_fetch_miss_penalty = 2,
+            .icache_hit_count = 0,
+            .icache_miss_count = 0,
+            .pipeline_mode = .off,
             .allocator = allocator,
         };
     }
@@ -111,6 +121,8 @@ pub const M68k = struct {
         self.cycles = 0;
         self.last_data_access_addr = 0;
         self.last_data_access_is_write = false;
+        self.icache_hit_count = 0;
+        self.icache_miss_count = 0;
         _ = self.memory.takeSplitCyclePenalty();
     }
     
@@ -361,6 +373,31 @@ pub const M68k = struct {
         self.split_bus_cycle_penalty_enabled = enabled;
     }
 
+    pub fn setICacheFetchMissPenalty(self: *M68k, penalty_cycles: u32) void {
+        self.icache_fetch_miss_penalty = penalty_cycles;
+    }
+
+    pub fn getICacheFetchMissPenalty(self: *const M68k) u32 {
+        return self.icache_fetch_miss_penalty;
+    }
+
+    pub fn clearICacheStats(self: *M68k) void {
+        self.icache_hit_count = 0;
+        self.icache_miss_count = 0;
+    }
+
+    pub fn getICacheStats(self: *const M68k) ICacheStats {
+        return .{ .hits = self.icache_hit_count, .misses = self.icache_miss_count };
+    }
+
+    pub fn setPipelineMode(self: *M68k, mode: PipelineMode) void {
+        self.pipeline_mode = mode;
+    }
+
+    pub fn getPipelineMode(self: *const M68k) PipelineMode {
+        return self.pipeline_mode;
+    }
+
     pub fn setCacr(self: *M68k, value: u32) void {
         if ((value & 0x8) != 0) {
             self.invalidateICache();
@@ -397,12 +434,14 @@ pub const M68k = struct {
         const line = self.icache[index];
         const use_low_word = (addr & 0x2) != 0;
         if (line.valid and line.tag == tag) {
+            self.icache_hit_count += 1;
             const opcode: u16 = if (use_low_word)
                 @truncate(line.data & 0xFFFF)
             else
                 @truncate(line.data >> 16);
             return .{ .opcode = opcode, .penalty_cycles = 0 };
         }
+        self.icache_miss_count += 1;
         const aligned_addr = addr & ~@as(u32, 0x3);
         const fetched = try self.memory.read32Bus(aligned_addr, access);
         self.icache[index] = .{ .valid = true, .tag = tag, .data = fetched };
@@ -410,7 +449,7 @@ pub const M68k = struct {
             @truncate(fetched & 0xFFFF)
         else
             @truncate(fetched >> 16);
-        return .{ .opcode = opcode, .penalty_cycles = 2 };
+        return .{ .opcode = opcode, .penalty_cycles = self.icache_fetch_miss_penalty };
     }
 
     fn finalizeStepCycles(self: *M68k, base_cycles: u32) u32 {
@@ -778,6 +817,71 @@ test "M68k instruction cache hit/miss and invalidate through CACR" {
     m68k.pc = 0x01000000;
     const c3 = try m68k.step();
     try std.testing.expectEqual(@as(u32, 6), c3);
+}
+
+test "M68k instruction cache exposes hit and miss statistics" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.initWithConfig(allocator, .{ .size = 64 * 1024 * 1024 });
+    defer m68k.deinit();
+
+    try m68k.memory.write16(0x01000000, 0x4E71); // NOP
+
+    // Cache disabled: stats remain unchanged.
+    m68k.pc = 0x01000000;
+    _ = try m68k.step();
+    const s0 = m68k.getICacheStats();
+    try std.testing.expectEqual(@as(u64, 0), s0.hits);
+    try std.testing.expectEqual(@as(u64, 0), s0.misses);
+
+    // Enable cache and force miss/hit/miss sequence.
+    m68k.setCacr(0x1);
+    m68k.pc = 0x01000000;
+    _ = try m68k.step(); // miss
+    m68k.pc = 0x01000000;
+    _ = try m68k.step(); // hit
+    m68k.setCacr(0x9); // invalidate request
+    m68k.pc = 0x01000000;
+    _ = try m68k.step(); // miss
+
+    const s1 = m68k.getICacheStats();
+    try std.testing.expectEqual(@as(u64, 1), s1.hits);
+    try std.testing.expectEqual(@as(u64, 2), s1.misses);
+
+    m68k.clearICacheStats();
+    const s2 = m68k.getICacheStats();
+    try std.testing.expectEqual(@as(u64, 0), s2.hits);
+    try std.testing.expectEqual(@as(u64, 0), s2.misses);
+}
+
+test "M68k instruction cache miss penalty is configurable" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.initWithConfig(allocator, .{ .size = 64 * 1024 * 1024 });
+    defer m68k.deinit();
+
+    try m68k.memory.write16(0x01200000, 0x4E71); // NOP
+    m68k.setCacr(0x1);
+    m68k.setICacheFetchMissPenalty(5);
+    try std.testing.expectEqual(@as(u32, 5), m68k.getICacheFetchMissPenalty());
+
+    m68k.pc = 0x01200000;
+    const c0 = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 9), c0); // base 4 + miss 5
+
+    m68k.pc = 0x01200000;
+    const c1 = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 4), c1); // hit
+}
+
+test "M68k pipeline mode flag supports off approx detailed states" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    try std.testing.expectEqual(M68k.PipelineMode.off, m68k.getPipelineMode());
+    m68k.setPipelineMode(.approx);
+    try std.testing.expectEqual(M68k.PipelineMode.approx, m68k.getPipelineMode());
+    m68k.setPipelineMode(.detailed);
+    try std.testing.expectEqual(M68k.PipelineMode.detailed, m68k.getPipelineMode());
 }
 
 test "M68k instruction cache fill is longword aligned" {

@@ -188,6 +188,39 @@ export fn m68k_set_pmmu_compat(m68k: *cpu.M68k, enabled: bool) void {
     m68k.setPmmuCompatEnabled(enabled);
 }
 
+export fn m68k_set_icache_fetch_miss_penalty(m68k: *cpu.M68k, penalty_cycles: u32) void {
+    m68k.setICacheFetchMissPenalty(penalty_cycles);
+}
+
+export fn m68k_get_icache_fetch_miss_penalty(m68k: *cpu.M68k) u32 {
+    return m68k.getICacheFetchMissPenalty();
+}
+
+export fn m68k_get_icache_hit_count(m68k: *cpu.M68k) u64 {
+    return m68k.getICacheStats().hits;
+}
+
+export fn m68k_get_icache_miss_count(m68k: *cpu.M68k) u64 {
+    return m68k.getICacheStats().misses;
+}
+
+export fn m68k_clear_icache_stats(m68k: *cpu.M68k) void {
+    m68k.clearICacheStats();
+}
+
+export fn m68k_set_pipeline_mode(m68k: *cpu.M68k, mode: u8) void {
+    const pipeline_mode: cpu.M68k.PipelineMode = switch (mode) {
+        1 => .approx,
+        2 => .detailed,
+        else => .off,
+    };
+    m68k.setPipelineMode(pipeline_mode);
+}
+
+export fn m68k_get_pipeline_mode(m68k: *cpu.M68k) u8 {
+    return @intFromEnum(m68k.getPipelineMode());
+}
+
 export fn m68k_set_pc(m68k: *cpu.M68k, pc: u32) void {
     m68k.pc = pc;
 }
@@ -418,6 +451,41 @@ test "root API context functions validate arguments" {
     defer _ = m68k_context_destroy(ctx);
 
     try std.testing.expectEqual(@as(c_int, -1), m68k_destroy_in_context(ctx, null));
+}
+
+test "root API exposes icache stats miss penalty and pipeline mode controls" {
+    const m68k = m68k_create_with_memory(64 * 1024 * 1024) orelse return error.OutOfMemory;
+    defer m68k_destroy(m68k);
+
+    m68k_write_memory_16(m68k, 0x2000, 0x4E7B); // MOVEC D0,CACR
+    m68k_write_memory_16(m68k, 0x2002, 0x0002);
+    m68k_set_reg_d(m68k, 0, 0x1); // enable cache
+    m68k_set_pc(m68k, 0x2000);
+    _ = m68k_step(m68k);
+
+    m68k_write_memory_16(m68k, 0x2100, 0x4E71); // NOP
+
+    m68k_set_icache_fetch_miss_penalty(m68k, 5);
+    try std.testing.expectEqual(@as(u32, 5), m68k_get_icache_fetch_miss_penalty(m68k));
+
+    m68k_set_pc(m68k, 0x2100);
+    try std.testing.expectEqual(@as(c_int, 9), m68k_step(m68k)); // miss
+    m68k_set_pc(m68k, 0x2100);
+    try std.testing.expectEqual(@as(c_int, 4), m68k_step(m68k)); // hit
+
+    try std.testing.expectEqual(@as(u64, 1), m68k_get_icache_hit_count(m68k));
+    try std.testing.expectEqual(@as(u64, 1), m68k_get_icache_miss_count(m68k));
+    m68k_clear_icache_stats(m68k);
+    try std.testing.expectEqual(@as(u64, 0), m68k_get_icache_hit_count(m68k));
+    try std.testing.expectEqual(@as(u64, 0), m68k_get_icache_miss_count(m68k));
+
+    try std.testing.expectEqual(@as(u8, 0), m68k_get_pipeline_mode(m68k));
+    m68k_set_pipeline_mode(m68k, 1);
+    try std.testing.expectEqual(@as(u8, 1), m68k_get_pipeline_mode(m68k));
+    m68k_set_pipeline_mode(m68k, 2);
+    try std.testing.expectEqual(@as(u8, 2), m68k_get_pipeline_mode(m68k));
+    m68k_set_pipeline_mode(m68k, 99); // fallback to off
+    try std.testing.expectEqual(@as(u8, 0), m68k_get_pipeline_mode(m68k));
 }
 
 const CallbackAllocStats = struct {
