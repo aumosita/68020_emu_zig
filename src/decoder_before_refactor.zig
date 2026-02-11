@@ -143,95 +143,6 @@ pub const Decoder = struct {
     }
     
     pub fn decode(self: *const Decoder, opcode: u16, pc: u32, read_word: *const fn(u32) u16) !Instruction {
-        const high4 = (opcode >> 12) & 0xF;
-        
-        return switch (high4) {
-            0x1, 0x2, 0x3 => try self.decodeMove(opcode, pc, read_word),
-            0x6 => try self.decodeBranch(opcode, pc, read_word),
-            0x7 => self.decodeMoveq(opcode, pc),
-            else => try self.decodeLegacy(opcode, pc, read_word),
-        };
-    }
-    
-    // ============================================================================
-    // Group 0x7: MOVEQ - Move Quick
-    // ============================================================================
-    fn decodeMoveq(self: *const Decoder, opcode: u16, pc: u32) Instruction {
-        _ = self;
-        var inst = Instruction.init();
-        inst.opcode = opcode;
-        inst.size = 2;
-        inst.mnemonic = .MOVEQ;
-        inst.dst = .{ .DataReg = @truncate((opcode >> 9) & 0x7) };
-        inst.src = .{ .Immediate8 = @truncate(opcode & 0xFF) };
-        _ = pc;
-        return inst;
-    }
-    
-    // ============================================================================
-    // Group 0x6: Branch instructions (Bcc, BRA, BSR)
-    // ============================================================================
-    fn decodeBranch(self: *const Decoder, opcode: u16, pc: u32, read_word: *const fn(u32) u16) !Instruction {
-        _ = self;
-        var current_pc = pc + 2;
-        var inst = Instruction.init();
-        inst.opcode = opcode;
-        
-        const condition: u8 = @truncate((opcode >> 8) & 0xF);
-        const disp8: i8 = @bitCast(@as(u8, @truncate(opcode & 0xFF)));
-        
-        if (condition == 0x0) { inst.mnemonic = .BRA; }
-        else if (condition == 0x1) { inst.mnemonic = .BSR; }
-        else { inst.mnemonic = .Bcc; }
-        
-        if (disp8 == 0) {
-            const disp16 = @as(i16, @bitCast(read_word(current_pc)));
-            current_pc += 2;
-            inst.src = .{ .Immediate16 = @bitCast(disp16) };
-        } else if (disp8 == -1) {
-            const high = read_word(current_pc);
-            const low = read_word(current_pc + 2);
-            current_pc += 4;
-            inst.src = .{ .Immediate32 = (@as(u32, high) << 16) | low };
-        } else {
-            inst.src = .{ .Immediate8 = @bitCast(disp8) };
-        }
-        
-        inst.size = @truncate(current_pc - pc);
-        return inst;
-    }
-    
-    // ============================================================================
-    // Group 0x1-0x3: MOVE instructions
-    // ============================================================================
-    fn decodeMove(self: *const Decoder, opcode: u16, pc: u32, read_word: *const fn(u32) u16) !Instruction {
-        var current_pc = pc + 2;
-        var inst = Instruction.init();
-        inst.opcode = opcode;
-        inst.mnemonic = .MOVE;
-        
-        const high4 = (opcode >> 12) & 0xF;
-        inst.data_size = switch (high4) {
-            0x1 => .Byte, 0x3 => .Word, 0x2 => .Long,
-            else => .Long,
-        };
-        
-        const src_mode = opcode & 0x7;
-        const src_reg = (opcode >> 3) & 0x7;
-        inst.src = try self.decodeEA(@truncate(src_mode), @truncate(src_reg), &current_pc, read_word, inst.data_size);
-        
-        const dst_mode = (opcode >> 6) & 0x7;
-        const dst_reg = (opcode >> 9) & 0x7;
-        inst.dst = try self.decodeEA(@truncate(dst_mode), @truncate(dst_reg), &current_pc, read_word, inst.data_size);
-        
-        inst.size = @truncate(current_pc - pc);
-        return inst;
-    }
-    
-    // ============================================================================
-    // Legacy decode (임시 - 점진적 리팩토링용)
-    // ============================================================================
-    fn decodeLegacy(self: *const Decoder, opcode: u16, pc: u32, read_word: *const fn(u32) u16) !Instruction {
         var current_pc = pc + 2;
         var inst = Instruction.init();
         inst.opcode = opcode;
@@ -279,6 +190,21 @@ pub const Decoder = struct {
                 } else {
                     inst.mnemonic = .UNKNOWN;
                 }
+            },
+            
+            0x1, 0x2, 0x3 => {
+                inst.mnemonic = .MOVE;
+                inst.data_size = switch (high4) {
+                    0x1 => .Byte, 0x3 => .Word, 0x2 => .Long,
+                    else => .Long,
+                };
+                const src_mode = opcode & 0x7;
+                const src_reg = (opcode >> 3) & 0x7;
+                inst.src = try self.decodeEA(@truncate(src_mode), @truncate(src_reg), &current_pc, read_word, inst.data_size);
+                
+                const dst_mode = (opcode >> 6) & 0x7;
+                const dst_reg = (opcode >> 9) & 0x7;
+                inst.dst = try self.decodeEA(@truncate(dst_mode), @truncate(dst_reg), &current_pc, read_word, inst.data_size);
             },
             
             0x4 => {
@@ -432,6 +358,33 @@ pub const Decoder = struct {
                     inst.src = .{ .Immediate8 = data };
                     inst.dst = try self.decodeEA(@truncate(mode), @truncate(reg), &current_pc, read_word, inst.data_size);
                 }
+            },
+            
+            0x6 => {
+                const condition: u8 = @truncate((opcode >> 8) & 0xF);
+                const disp8: i8 = @bitCast(@as(u8, @truncate(opcode & 0xFF)));
+                if (condition == 0x0) { inst.mnemonic = .BRA; }
+                else if (condition == 0x1) { inst.mnemonic = .BSR; }
+                else { inst.mnemonic = .Bcc; }
+                
+                if (disp8 == 0) {
+                    const disp16 = @as(i16, @bitCast(read_word(current_pc)));
+                    current_pc += 2;
+                    inst.src = .{ .Immediate16 = @bitCast(disp16) };
+                } else if (disp8 == -1) {
+                    const high = read_word(current_pc);
+                    const low = read_word(current_pc + 2);
+                    current_pc += 4;
+                    inst.src = .{ .Immediate32 = (@as(u32, high) << 16) | low };
+                } else {
+                    inst.src = .{ .Immediate8 = @bitCast(disp8) };
+                }
+            },
+            
+            0x7 => {
+                inst.mnemonic = .MOVEQ;
+                inst.dst = .{ .DataReg = @truncate((opcode >> 9) & 0x7) };
+                inst.src = .{ .Immediate8 = @truncate(opcode & 0xFF) };
             },
             
             0x8 => {
