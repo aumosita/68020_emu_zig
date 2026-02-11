@@ -33,3 +33,26 @@
 관련 테스트:
 - `src/memory.zig` translation-cache 테스트 3종
 - `src/root.zig` `root API can invalidate translation cache`
+
+## 벤치 비교(2026-02-11)
+
+실행 명령:
+
+```bash
+zig run src/bench_translation_cache.zig
+```
+
+측정 결과(동일 머신 1회 측정):
+
+- iterations: `2,000,000`
+- uncached(매 접근 flush):
+  - `uncached_ns=127515708`
+  - `uncached_translator_calls=2000000`
+- cached(TLB 유지):
+  - `cached_ns=64633666`
+  - `cached_translator_calls=1`
+
+요약:
+
+- translator 콜백 호출 수가 거의 제거됨(2,000,000 -> 1)
+- 해당 마이크로벤치에서는 wall-clock 기준 약 1.97x 개선

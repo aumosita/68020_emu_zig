@@ -57,13 +57,12 @@
 
 - 불법 인코딩/확장 워드 예외 커버리지 확장 ✅(완료)
 
-- 소프트웨어 TLB(주소 변환 캐시) 도입
-  - 진행: `address_translator` 경로에 8-entry direct-mapped TLB fast-path 추가
-  - 진행: key(page + FC + space + R/W), value(physical page base) 캐싱 반영
-  - 진행: flush/invalidate API 제공(`Memory.invalidateTranslationCache`, `m68k_invalidate_translation_cache`)
-  - 진행: translator 콜백 호출 감소/flush 일관성 회귀 테스트 추가
-  - 진행: 설계/무효화 정책 문서화(`docs/translation-cache.md`)
-  - 완료 기준(남음): 대표 워크로드 기준 벤치 비교 수치 문서화
+- 소프트웨어 TLB(주소 변환 캐시) 도입 ✅(완료)
+  - ✅ `address_translator` 경로에 8-entry direct-mapped TLB fast-path 추가
+  - ✅ key(page + FC + space + R/W), value(physical page base) 캐싱 반영
+  - ✅ flush/invalidate API 제공(`Memory.invalidateTranslationCache`, `m68k_invalidate_translation_cache`)
+  - ✅ translator 콜백 호출 감소/flush 일관성 회귀 테스트 추가
+  - ✅ 설계/무효화 정책 + 벤치 비교 수치 문서화(`docs/translation-cache.md`)
 
 ## 중간 우선순위
 
