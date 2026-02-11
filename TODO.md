@@ -75,6 +75,7 @@
   - 진행: `TRAP/TRAPV/RESET(supervisor)/TRAPcc/RTE/illegal decode` 고정 cycle assertion 회귀 추가
   - 진행: `ABCD/SBCD/NBCD/MOVEP/CAS2/CMPM/SHIFT/MOVEA/STOP/ORI-ANDI-EORI` cycle assertion 회귀 추가
   - 진행: `CHK2/CMP2/CALLM-RTM/TAS/MUL*_L/DIV*_L` cycle assertion 회귀 추가
+  - 진행: `PACK/UNPK/MOVEC/ComplexEA/extended-EA/memory shift` cycle assertion 회귀 추가
   - 잔여: 핵심 명령 cycle 회귀 테스트 범위 확장
 
 - `MOVEM` 비용 모델 세분화 ✅(완료)

@@ -940,9 +940,10 @@ test "M68k MOVEC - Control Register Access" {
     try m68k.memory.write16(0x100, 0x4E7B);
     try m68k.memory.write16(0x102, 0x0000);
     m68k.pc = 0x100;
-    _ = try m68k.step();
+    const movec_sfc_cycles = try m68k.step();
     
     try std.testing.expectEqual(@as(u3, 5), m68k.sfc);
+    try std.testing.expectEqual(@as(u32, 12), movec_sfc_cycles);
     
     // Test MOVEC D1,DFC - Move to DFC (Destination Function Code)
     m68k.d[1] = 3;
@@ -950,9 +951,10 @@ test "M68k MOVEC - Control Register Access" {
     try m68k.memory.write16(0x104, 0x4E7B);
     try m68k.memory.write16(0x106, 0x1001);
     m68k.pc = 0x104;
-    _ = try m68k.step();
+    const movec_dfc_cycles = try m68k.step();
     
     try std.testing.expectEqual(@as(u3, 3), m68k.dfc);
+    try std.testing.expectEqual(@as(u32, 12), movec_dfc_cycles);
     
     // Test MOVEC A0,USP - Move to USP (User Stack Pointer)
     m68k.a[0] = 0x12345678;
@@ -960,9 +962,10 @@ test "M68k MOVEC - Control Register Access" {
     try m68k.memory.write16(0x108, 0x4E7B);
     try m68k.memory.write16(0x10A, 0x8800);
     m68k.pc = 0x108;
-    _ = try m68k.step();
+    const movec_usp_cycles = try m68k.step();
     
     try std.testing.expectEqual(@as(u32, 0x12345678), m68k.usp);
+    try std.testing.expectEqual(@as(u32, 12), movec_usp_cycles);
     
     // Test MOVEC VBR,D2 - Move from VBR
     m68k.vbr = 0xABCDEF00;
@@ -970,9 +973,10 @@ test "M68k MOVEC - Control Register Access" {
     try m68k.memory.write16(0x10C, 0x4E7A);
     try m68k.memory.write16(0x10E, 0x2801);
     m68k.pc = 0x10C;
-    _ = try m68k.step();
+    const movec_vbr_cycles = try m68k.step();
     
     try std.testing.expectEqual(@as(u32, 0xABCDEF00), m68k.d[2]);
+    try std.testing.expectEqual(@as(u32, 12), movec_vbr_cycles);
     
     // Test MOVEC CACR,D3 - Move from CACR (Cache Control Register)
     m68k.cacr = 0x00000101;
@@ -980,9 +984,10 @@ test "M68k MOVEC - Control Register Access" {
     try m68k.memory.write16(0x110, 0x4E7A);
     try m68k.memory.write16(0x112, 0x3002);
     m68k.pc = 0x110;
-    _ = try m68k.step();
+    const movec_cacr_cycles = try m68k.step();
     
     try std.testing.expectEqual(@as(u32, 0x00000101), m68k.d[3]);
+    try std.testing.expectEqual(@as(u32, 14), movec_cacr_cycles);
 }
 
 test "M68k MOVEC stack registers do not force active A7 sync" {
@@ -1002,16 +1007,18 @@ test "M68k MOVEC stack registers do not force active A7 sync" {
     try m68k.memory.write16(0x200, 0x4E7B);
     try m68k.memory.write16(0x202, 0x8804);
     m68k.pc = 0x200;
-    _ = try m68k.step();
+    const movec_isp_write_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0xAAAA0000), m68k.getStackRegister(.Interrupt));
     try std.testing.expectEqual(@as(u32, 0x2000), m68k.a[7]); // unchanged active A7
+    try std.testing.expectEqual(@as(u32, 12), movec_isp_write_cycles);
 
     // MOVEC ISP,D1 reads the raw ISP register value.
     try m68k.memory.write16(0x204, 0x4E7A);
     try m68k.memory.write16(0x206, 0x1804);
     m68k.pc = 0x204;
-    _ = try m68k.step();
+    const movec_isp_read_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0xAAAA0000), m68k.d[1]);
+    try std.testing.expectEqual(@as(u32, 12), movec_isp_read_cycles);
 
     m68k.setSR(M68k.FLAG_S | M68k.FLAG_M); // master stack active
     m68k.a[2] = 0xBBBB0000;
@@ -1019,25 +1026,28 @@ test "M68k MOVEC stack registers do not force active A7 sync" {
     try m68k.memory.write16(0x208, 0x4E7B);
     try m68k.memory.write16(0x20A, 0xA803);
     m68k.pc = 0x208;
-    _ = try m68k.step();
+    const movec_msp_write_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0xBBBB0000), m68k.getStackRegister(.Master));
     try std.testing.expectEqual(@as(u32, 0x3000), m68k.a[7]); // unchanged active A7
+    try std.testing.expectEqual(@as(u32, 12), movec_msp_write_cycles);
 
     // MOVEC MSP,D2
     try m68k.memory.write16(0x20C, 0x4E7A);
     try m68k.memory.write16(0x20E, 0x2803);
     m68k.pc = 0x20C;
-    _ = try m68k.step();
+    const movec_msp_read_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0xBBBB0000), m68k.d[2]);
+    try std.testing.expectEqual(@as(u32, 12), movec_msp_read_cycles);
 
     m68k.a[3] = 0xCCCC0000;
     // MOVEC A3,USP (0x800)
     try m68k.memory.write16(0x210, 0x4E7B);
     try m68k.memory.write16(0x212, 0xB800);
     m68k.pc = 0x210;
-    _ = try m68k.step();
+    const movec_usp_write_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0xCCCC0000), m68k.getStackRegister(.User));
     try std.testing.expectEqual(@as(u32, 0x3000), m68k.a[7]); // still master A7
+    try std.testing.expectEqual(@as(u32, 12), movec_usp_write_cycles);
 }
 
 test "M68k MOVEC privilege violation in user mode" {
@@ -1977,8 +1987,9 @@ test "M68k ComplexEA execute path - read and write" {
     read_inst.dst = .{ .DataReg = 0 };
 
     m68k.pc = 0x200;
-    _ = try m68k.executor.execute(&m68k, &read_inst);
+    const complex_read_cycles = try m68k.executor.execute(&m68k, &read_inst);
     try std.testing.expectEqual(@as(u32, 0xDEADBEEF), m68k.d[0]);
+    try std.testing.expectEqual(@as(u32, 8), complex_read_cycles);
 
     m68k.d[2] = 0xAABBCCDD;
     var write_inst = decoder.Instruction.init();
@@ -1988,8 +1999,9 @@ test "M68k ComplexEA execute path - read and write" {
     write_inst.src = .{ .DataReg = 2 };
     write_inst.dst = read_inst.src;
 
-    _ = try m68k.executor.execute(&m68k, &write_inst);
+    const complex_write_cycles = try m68k.executor.execute(&m68k, &write_inst);
     try std.testing.expectEqual(@as(u32, 0xAABBCCDD), try m68k.memory.read32(0x1014));
+    try std.testing.expectEqual(@as(u32, 8), complex_write_cycles);
 }
 
 test "M68k PACK/UNPK register and memory forms" {
@@ -2006,8 +2018,9 @@ test "M68k PACK/UNPK register and memory forms" {
     pack_reg.extension_word = 0x0000;
     m68k.d[1] = 0x00000405;
     m68k.pc = 0x100;
-    _ = try m68k.executor.execute(&m68k, &pack_reg);
+    const pack_reg_cycles = try m68k.executor.execute(&m68k, &pack_reg);
     try std.testing.expectEqual(@as(u8, 0x45), @as(u8, @truncate(m68k.d[0])));
+    try std.testing.expectEqual(@as(u32, 5), pack_reg_cycles);
 
     // UNPK D1,D0,#0 : 0x45 -> 0x0405
     var unpk_reg = decoder.Instruction.init();
@@ -2018,8 +2031,9 @@ test "M68k PACK/UNPK register and memory forms" {
     unpk_reg.extension_word = 0x0000;
     m68k.d[1] = 0x00000045;
     m68k.pc = 0x104;
-    _ = try m68k.executor.execute(&m68k, &unpk_reg);
+    const unpk_reg_cycles = try m68k.executor.execute(&m68k, &unpk_reg);
     try std.testing.expectEqual(@as(u16, 0x0405), @as(u16, @truncate(m68k.d[0])));
+    try std.testing.expectEqual(@as(u32, 5), unpk_reg_cycles);
 
     // PACK -(A1),-(A0),#0 : [A1-2]=0x0405 -> [A0-1]=0x45
     var pack_mem = decoder.Instruction.init();
@@ -2032,10 +2046,11 @@ test "M68k PACK/UNPK register and memory forms" {
     m68k.a[0] = 0x3001;
     try m68k.memory.write16(0x2000, 0x0405);
     m68k.pc = 0x108;
-    _ = try m68k.executor.execute(&m68k, &pack_mem);
+    const pack_mem_cycles = try m68k.executor.execute(&m68k, &pack_mem);
     try std.testing.expectEqual(@as(u32, 0x2000), m68k.a[1]);
     try std.testing.expectEqual(@as(u32, 0x3000), m68k.a[0]);
     try std.testing.expectEqual(@as(u8, 0x45), try m68k.memory.read8(0x3000));
+    try std.testing.expectEqual(@as(u32, 6), pack_mem_cycles);
 
     // UNPK -(A1),-(A0),#0 : [A1-1]=0x45 -> [A0-2]=0x0405
     var unpk_mem = decoder.Instruction.init();
@@ -2048,10 +2063,11 @@ test "M68k PACK/UNPK register and memory forms" {
     m68k.a[0] = 0x5002;
     try m68k.memory.write8(0x4000, 0x45);
     m68k.pc = 0x10C;
-    _ = try m68k.executor.execute(&m68k, &unpk_mem);
+    const unpk_mem_cycles = try m68k.executor.execute(&m68k, &unpk_mem);
     try std.testing.expectEqual(@as(u32, 0x4000), m68k.a[1]);
     try std.testing.expectEqual(@as(u32, 0x5000), m68k.a[0]);
     try std.testing.expectEqual(@as(u16, 0x0405), try m68k.memory.read16(0x5000));
+    try std.testing.expectEqual(@as(u32, 6), unpk_mem_cycles);
 }
 
 test "M68k CHK2/CMP2 execution semantics" {
@@ -2824,8 +2840,9 @@ test "M68k extended-EA instructions advance PC by decoded size" {
     m68k.a[0] = 0x2400;
     try m68k.memory.write8(0x2410, 0x12);
     m68k.pc = 0xE800;
-    _ = try m68k.step();
+    const tst_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0xE804), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 4), tst_cycles);
 
     // PEA (16,A1)
     try m68k.memory.write16(0xE810, 0x4869);
@@ -2833,19 +2850,21 @@ test "M68k extended-EA instructions advance PC by decoded size" {
     m68k.a[1] = 0x2500;
     m68k.a[7] = 0x6000;
     m68k.pc = 0xE810;
-    _ = try m68k.step();
+    const pea_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0xE814), m68k.pc);
     try std.testing.expectEqual(@as(u32, 0x5FFC), m68k.a[7]);
     try std.testing.expectEqual(@as(u32, 0x2510), try m68k.memory.read32(0x5FFC));
+    try std.testing.expectEqual(@as(u32, 12), pea_cycles);
 
     // ST (16,A2) : Scc with true condition to memory.
     try m68k.memory.write16(0xE820, 0x50EA);
     try m68k.memory.write16(0xE822, 0x0010);
     m68k.a[2] = 0x2600;
     m68k.pc = 0xE820;
-    _ = try m68k.step();
+    const scc_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0xE824), m68k.pc);
     try std.testing.expectEqual(@as(u8, 0xFF), try m68k.memory.read8(0x2610));
+    try std.testing.expectEqual(@as(u32, 4), scc_cycles);
 
     // MULU.W (16,A3),D0
     try m68k.memory.write16(0xE830, 0xC0EB);
@@ -2854,9 +2873,10 @@ test "M68k extended-EA instructions advance PC by decoded size" {
     try m68k.memory.write16(0x2710, 3);
     m68k.d[0] = 2;
     m68k.pc = 0xE830;
-    _ = try m68k.step();
+    const mulu_w_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0xE834), m68k.pc);
     try std.testing.expectEqual(@as(u32, 6), m68k.d[0]);
+    try std.testing.expectEqual(@as(u32, 38), mulu_w_cycles);
 }
 
 test "M68k memory shift with extension EA advances PC by instruction size" {
@@ -2871,10 +2891,11 @@ test "M68k memory shift with extension EA advances PC by instruction size" {
     try m68k.memory.write16(0x2810, 0x0001);
     m68k.pc = 0xE900;
 
-    _ = try m68k.step();
+    const mem_shift_cycles = try m68k.step();
 
     try std.testing.expectEqual(@as(u32, 0xE904), m68k.pc);
     try std.testing.expectEqual(@as(u16, 0x0002), try m68k.memory.read16(0x2810));
+    try std.testing.expectEqual(@as(u32, 8), mem_shift_cycles);
 }
 
 test "M68k MUL*_L and DIV*_L execution semantics" {
