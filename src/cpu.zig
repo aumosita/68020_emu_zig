@@ -44,6 +44,7 @@ pub const M68k = struct {
     cycles: u64,
     last_data_access_addr: u32,
     last_data_access_is_write: bool,
+    split_bus_cycle_penalty_enabled: bool,
     allocator: std.mem.Allocator,
     
     pub fn init(allocator: std.mem.Allocator) M68k {
@@ -78,6 +79,7 @@ pub const M68k = struct {
             .cycles = 0,
             .last_data_access_addr = 0,
             .last_data_access_is_write = false,
+            .split_bus_cycle_penalty_enabled = false,
             .allocator = allocator,
         };
     }
@@ -104,6 +106,7 @@ pub const M68k = struct {
         self.cycles = 0;
         self.last_data_access_addr = 0;
         self.last_data_access_is_write = false;
+        _ = self.memory.takeSplitCyclePenalty();
     }
     
     pub fn getExceptionVector(self: *const M68k, vector_number: u8) u32 {
@@ -130,23 +133,20 @@ pub const M68k = struct {
     }
 
     pub fn step(self: *M68k) !u32 {
+        _ = self.memory.takeSplitCyclePenalty();
         if (try self.handlePendingInterrupt()) {
-            self.cycles += 44;
-            return 44;
+            return self.finalizeStepCycles(44);
         }
         if (self.stopped) {
-            self.cycles += 4;
-            return 4;
+            return self.finalizeStepCycles(4);
         }
         const fetch = self.fetchInstructionWord(self.pc) catch |err| switch (err) {
             error.BusRetry => {
-                self.cycles += 4;
-                return 4;
+                return self.finalizeStepCycles(4);
             },
             error.BusHalt => {
                 self.stopped = true;
-                self.cycles += 4;
-                return 4;
+                return self.finalizeStepCycles(4);
             },
             error.BusError => {
                 try self.enterBusErrorFrameA(self.pc, self.pc, .{
@@ -155,8 +155,7 @@ pub const M68k = struct {
                     .is_write = false,
                 });
                 const cycles = faultCycles(.instruction_fetch);
-                self.cycles += cycles;
-                return cycles;
+                return self.finalizeStepCycles(cycles);
             },
             error.AddressError => {
                 try self.enterAddressErrorFrameA(self.pc, self.pc, .{
@@ -165,8 +164,7 @@ pub const M68k = struct {
                     .is_write = false,
                 });
                 const cycles = faultCycles(.instruction_fetch);
-                self.cycles += cycles;
-                return cycles;
+                return self.finalizeStepCycles(cycles);
             },
             else => return err,
         };
@@ -178,8 +176,7 @@ pub const M68k = struct {
         const instruction = self.decoder.decode(opcode, self.pc, &M68k.globalReadWord) catch |err| switch (err) {
             error.IllegalInstruction => {
                 try self.enterException(4, self.pc, 0, null);
-                self.cycles += 34 + fetch.penalty_cycles;
-                return 34 + fetch.penalty_cycles;
+                return self.finalizeStepCycles(34 + fetch.penalty_cycles);
             },
             else => return err,
         };
@@ -198,20 +195,17 @@ pub const M68k = struct {
                 });
             }
             const cycles = faultCycles(.decode_extension_fetch) + fetch.penalty_cycles;
-            self.cycles += cycles;
-            return cycles;
+            return self.finalizeStepCycles(cycles);
         }
         self.last_data_access_addr = self.pc;
         self.last_data_access_is_write = false;
         const cycles_used = self.executor.execute(self, &instruction) catch |err| switch (err) {
             error.BusRetry => {
-                self.cycles += 4 + fetch.penalty_cycles;
-                return 4 + fetch.penalty_cycles;
+                return self.finalizeStepCycles(4 + fetch.penalty_cycles);
             },
             error.BusHalt => {
                 self.stopped = true;
-                self.cycles += 4 + fetch.penalty_cycles;
-                return 4 + fetch.penalty_cycles;
+                return self.finalizeStepCycles(4 + fetch.penalty_cycles);
             },
             error.BusError => {
                 try self.enterBusErrorFrameA(self.pc, self.last_data_access_addr, .{
@@ -220,8 +214,7 @@ pub const M68k = struct {
                     .is_write = self.last_data_access_is_write,
                 });
                 const cycles = faultCycles(.execute_data_access) + fetch.penalty_cycles;
-                self.cycles += cycles;
-                return cycles;
+                return self.finalizeStepCycles(cycles);
             },
             error.InvalidAddress => {
                 try self.enterBusErrorFrameA(self.pc, self.last_data_access_addr, .{
@@ -230,8 +223,7 @@ pub const M68k = struct {
                     .is_write = self.last_data_access_is_write,
                 });
                 const cycles = faultCycles(.execute_data_access) + fetch.penalty_cycles;
-                self.cycles += cycles;
-                return cycles;
+                return self.finalizeStepCycles(cycles);
             },
             error.AddressError => {
                 try self.enterAddressErrorFrameA(self.pc, self.last_data_access_addr, .{
@@ -240,18 +232,15 @@ pub const M68k = struct {
                     .is_write = self.last_data_access_is_write,
                 });
                 const cycles = faultCycles(.execute_data_access) + fetch.penalty_cycles;
-                self.cycles += cycles;
-                return cycles;
+                return self.finalizeStepCycles(cycles);
             },
             error.InvalidOperand, error.InvalidExtensionWord, error.InvalidControlRegister, error.Err => {
                 try self.enterException(4, self.pc, 0, null);
-                self.cycles += 34 + fetch.penalty_cycles;
-                return 34 + fetch.penalty_cycles;
+                return self.finalizeStepCycles(34 + fetch.penalty_cycles);
             },
             else => return err,
         };
-        self.cycles += cycles_used + fetch.penalty_cycles;
-        return cycles_used + fetch.penalty_cycles;
+        return self.finalizeStepCycles(cycles_used + fetch.penalty_cycles);
     }
     
     threadlocal var current_instance: ?*const M68k = null;
@@ -359,6 +348,10 @@ pub const M68k = struct {
         self.bkpt_ctx = ctx;
     }
 
+    pub fn setSplitBusCyclePenaltyEnabled(self: *M68k, enabled: bool) void {
+        self.split_bus_cycle_penalty_enabled = enabled;
+    }
+
     pub fn setCacr(self: *M68k, value: u32) void {
         if ((value & 0x8) != 0) {
             self.invalidateICache();
@@ -409,6 +402,13 @@ pub const M68k = struct {
         else
             @truncate(fetched >> 16);
         return .{ .opcode = opcode, .penalty_cycles = 2 };
+    }
+
+    fn finalizeStepCycles(self: *M68k, base_cycles: u32) u32 {
+        const split_penalty = self.memory.takeSplitCyclePenalty();
+        const total = base_cycles + if (self.split_bus_cycle_penalty_enabled) split_penalty else 0;
+        self.cycles += total;
+        return total;
     }
 
     fn buildFormatAAccessWord(access: memory.BusAccess) u16 {
@@ -811,6 +811,62 @@ test "M68k instruction cache capacity tracks 256B line window" {
     m68k.pc = 0x00400000;
     const c2 = try m68k.step();
     try std.testing.expectEqual(@as(u32, 4), c2); // hit
+}
+
+test "M68k split bus cycle penalty is opt-in and adds fetch overhead on narrow port" {
+    const allocator = std.testing.allocator;
+    const width8_region = [_]memory.PortRegion{
+        .{ .start = 0x0000, .end_exclusive = 0x0100, .width = .Width8 },
+    };
+
+    // Disabled path: legacy cycle model unchanged.
+    var m68k_no_penalty = M68k.initWithConfig(allocator, .{
+        .size = 0x1000,
+        .default_port_width = .Width32,
+        .port_regions = &width8_region,
+    });
+    defer m68k_no_penalty.deinit();
+    try m68k_no_penalty.memory.write16(0x0040, 0x4E71); // NOP
+    m68k_no_penalty.pc = 0x0040;
+    const c0 = try m68k_no_penalty.step();
+    try std.testing.expectEqual(@as(u32, 4), c0);
+
+    // Enabled path: 16-bit fetch over 8-bit port adds +1 split penalty.
+    var m68k_penalty = M68k.initWithConfig(allocator, .{
+        .size = 0x1000,
+        .default_port_width = .Width32,
+        .port_regions = &width8_region,
+    });
+    defer m68k_penalty.deinit();
+    m68k_penalty.setSplitBusCyclePenaltyEnabled(true);
+    try m68k_penalty.memory.write16(0x0040, 0x4E71); // NOP
+    m68k_penalty.pc = 0x0040;
+    const c1 = try m68k_penalty.step();
+    try std.testing.expectEqual(@as(u32, 5), c1);
+}
+
+test "M68k split bus cycle penalty adds data-path overhead independent of semantics" {
+    const allocator = std.testing.allocator;
+    const width8_region = [_]memory.PortRegion{
+        .{ .start = 0x0000, .end_exclusive = 0x1000, .width = .Width8 },
+    };
+    var m68k = M68k.initWithConfig(allocator, .{
+        .size = 0x2000,
+        .default_port_width = .Width32,
+        .port_regions = &width8_region,
+    });
+    defer m68k.deinit();
+
+    m68k.setSplitBusCyclePenaltyEnabled(true);
+    m68k.d[0] = 0xAABBCCDD;
+    m68k.a[0] = 0x0200;
+    try m68k.memory.write16(0x0100, 0x2080); // MOVE.L D0,(A0)
+    m68k.pc = 0x0100;
+
+    // Base model 6 cycles + fetch split(1) + data write split(3) = 10.
+    const cycles = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 10), cycles);
+    try std.testing.expectEqual(@as(u32, 0xAABBCCDD), try m68k.memory.read32(0x0200));
 }
 
 test "M68k RTE - Return from Exception" {

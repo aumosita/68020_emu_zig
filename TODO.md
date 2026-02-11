@@ -87,12 +87,12 @@
   - ✅ `retry/halt/bus_error` 시 CPU step의 재시도/정지/예외 진입 규칙 회귀 테스트 추가
   - ✅ data access 경로를 bus hook/translator 경로와 통합(`read/write*Bus`)하고 회귀 검증 반영
 
-- Dynamic Bus Sizing(8/16/32-bit 포트) 모델 도입
+- Dynamic Bus Sizing(8/16/32-bit 포트) 모델 도입 ✅(완료)
   - ✅ 메모리 영역별 port width 속성 정의
   - ✅ 32-bit 접근의 분할 버스 사이클(예: 8-bit 포트에서 4회 접근) 모델링
   - ✅ 포트 폭별 read/write 분할 회귀 테스트 추가(`src/memory.zig`)
-  - 진행: 기능 정확도와 독립적인 cycle 비용 계산 경로 분리
-  - 완료 기준: cycle 기대값 테스트까지 포함해 CPU step 비용 모델과 연동
+  - ✅ 기능 정확도와 독립적인 cycle 비용 계산 경로 분리(`memory.takeSplitCyclePenalty` + `cpu.step` opt-in 연동)
+  - ✅ cycle 기대값 테스트 추가(포트 폭 분할 fetch/data 경로)
 
 - I-Cache 구조 고증 정합성 보강(68020 256B) ✅(완료)
   - ✅ line 데이터 폭을 longword 중심으로 재정의(64 entries x 4 bytes)
@@ -137,4 +137,3 @@
 - bitfield 희소 인코딩 및 외부 validation vector와의 교차검증
 - 신규 명령/사이클 정책 변경 시 고정 cycle assertion 테스트 동반 갱신
 - 핸들러 반환 타입 확장 시 코프로세서 계약 문서/회귀 동시 갱신
-- Dynamic Bus Sizing의 포트 폭별 멀티사이클 비용을 CPU cycle 모델과 분리/연동하고 기대 cycle 회귀 추가

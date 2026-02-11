@@ -22,6 +22,9 @@
   - execute data access fault: `54`
 - illegal/decode fault: `34`
 - I-cache miss fetch penalty: `+2` (fetch 단계)
+- (옵션) Dynamic Bus Sizing split penalty: `+N`
+  - `N`은 포트 폭 분할로 발생한 추가 bus sub-access 수
+  - 기본값은 비활성, `setSplitBusCyclePenaltyEnabled(true)`에서만 합산
 
 `src/executor.zig`의 대표 고정 반환:
 

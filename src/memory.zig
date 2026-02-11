@@ -40,6 +40,7 @@ pub const Memory = struct {
     address_translator_ctx: ?*anyopaque,
     default_port_width: PortWidth,
     port_regions: []PortRegion,
+    split_cycle_penalty: u32,
     allocator: std.mem.Allocator,
     
     pub fn init(allocator: std.mem.Allocator) Memory {
@@ -59,6 +60,7 @@ pub const Memory = struct {
                 .address_translator_ctx = config.address_translator_ctx,
                 .default_port_width = config.default_port_width,
                 .port_regions = &[_]PortRegion{},
+                .split_cycle_penalty = 0,
                 .allocator = allocator,
             };
         };
@@ -74,6 +76,7 @@ pub const Memory = struct {
                 .address_translator_ctx = config.address_translator_ctx,
                 .default_port_width = config.default_port_width,
                 .port_regions = &[_]PortRegion{},
+                .split_cycle_penalty = 0,
                 .allocator = allocator,
             };
         };
@@ -92,6 +95,7 @@ pub const Memory = struct {
             .address_translator_ctx = config.address_translator_ctx,
             .default_port_width = config.default_port_width,
             .port_regions = regions,
+            .split_cycle_penalty = 0,
             .allocator = allocator,
         };
     }
@@ -128,6 +132,16 @@ pub const Memory = struct {
             return translator(self.address_translator_ctx, logical_addr, access) catch return error.BusError;
         }
         return logical_addr;
+    }
+
+    fn addSplitCyclePenalty(self: *Memory, extra_cycles: u32) void {
+        self.split_cycle_penalty +|= extra_cycles;
+    }
+
+    pub fn takeSplitCyclePenalty(self: *Memory) u32 {
+        const penalty = self.split_cycle_penalty;
+        self.split_cycle_penalty = 0;
+        return penalty;
     }
 
     fn portWidthFor(self: *const Memory, logical_addr: u32) PortWidth {
@@ -194,6 +208,7 @@ pub const Memory = struct {
     pub fn read16Bus(self: *const Memory, logical_addr: u32, access: BusAccess) !u16 {
         return switch (self.portWidthFor(logical_addr)) {
             .Width8 => {
+                @constCast(self).addSplitCyclePenalty(1);
                 const high = try self.read8BusRaw(logical_addr, access);
                 const low = try self.read8BusRaw(logical_addr + 1, access);
                 return (@as(u16, high) << 8) | low;
@@ -205,6 +220,7 @@ pub const Memory = struct {
     pub fn read32Bus(self: *const Memory, logical_addr: u32, access: BusAccess) !u32 {
         return switch (self.portWidthFor(logical_addr)) {
             .Width8 => {
+                @constCast(self).addSplitCyclePenalty(3);
                 const b0 = try self.read8BusRaw(logical_addr, access);
                 const b1 = try self.read8BusRaw(logical_addr + 1, access);
                 const b2 = try self.read8BusRaw(logical_addr + 2, access);
@@ -212,6 +228,7 @@ pub const Memory = struct {
                 return (@as(u32, b0) << 24) | (@as(u32, b1) << 16) | (@as(u32, b2) << 8) | b3;
             },
             .Width16 => {
+                @constCast(self).addSplitCyclePenalty(1);
                 const hi = try self.read16BusRaw(logical_addr, access);
                 const lo = try self.read16BusRaw(logical_addr + 2, access);
                 return (@as(u32, hi) << 16) | lo;
@@ -227,6 +244,7 @@ pub const Memory = struct {
     pub fn write16Bus(self: *Memory, logical_addr: u32, value: u16, access: BusAccess) !void {
         switch (self.portWidthFor(logical_addr)) {
             .Width8 => {
+                self.addSplitCyclePenalty(1);
                 try self.write8BusRaw(logical_addr, @truncate(value >> 8), access);
                 try self.write8BusRaw(logical_addr + 1, @truncate(value & 0xFF), access);
             },
@@ -237,12 +255,14 @@ pub const Memory = struct {
     pub fn write32Bus(self: *Memory, logical_addr: u32, value: u32, access: BusAccess) !void {
         switch (self.portWidthFor(logical_addr)) {
             .Width8 => {
+                self.addSplitCyclePenalty(3);
                 try self.write8BusRaw(logical_addr, @truncate(value >> 24), access);
                 try self.write8BusRaw(logical_addr + 1, @truncate((value >> 16) & 0xFF), access);
                 try self.write8BusRaw(logical_addr + 2, @truncate((value >> 8) & 0xFF), access);
                 try self.write8BusRaw(logical_addr + 3, @truncate(value & 0xFF), access);
             },
             .Width16 => {
+                self.addSplitCyclePenalty(1);
                 try self.write16BusRaw(logical_addr, @truncate(value >> 16), access);
                 try self.write16BusRaw(logical_addr + 2, @truncate(value & 0xFFFF), access);
             },
