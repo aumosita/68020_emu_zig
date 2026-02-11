@@ -42,3 +42,6 @@
 
 - `platform-layer.md`
   CPU 외부 PIC/timer/UART stub 설계와 IRQ 주입 경계 계약
+
+- `benchmark-guide.md`
+  3개 대표 워크로드 기반 성능 측정 절차와 기준 수치

@@ -131,10 +131,10 @@
   - ✅ 코어와 플랫폼 경계(IRQ 주입/ack/vector 계약) 문서화(`docs/platform-layer.md`)
   - ✅ 샘플 플랫폼 루프에서 주기 IRQ/핸들러 왕복 데모 동작(`src/demo_platform_loop.zig`)
 
-- 벤치마크/품질 측정
-  - 대표 워크로드 3개 기준 회귀 성능 측정 스크립트 준비
-  - CPI/MIPS는 참고 지표로만 보고, 기능 회귀를 우선 게이트로 유지
-  - 완료 기준: 재현 가능한 벤치 실행 절차 문서화
+- 벤치마크/품질 측정 ✅(완료)
+  - ✅ 대표 워크로드 3개 기준 회귀 성능 측정 실행기 추가(`src/bench_workloads.zig`)
+  - ✅ CPI/MIPS는 참고 지표, 기능 회귀 우선 게이트 정책 명시
+  - ✅ 재현 가능한 벤치 실행 절차/기준 수치 문서화(`docs/benchmark-guide.md`)
 
 - 외부 검증 스위트 연동
   - 외부 68k validation vectors(JSON/바이너리)를 로드하는 테스트 러너 추가
