@@ -186,6 +186,11 @@ pub const M68k = struct {
             else => return err,
         };
         const opcode = fetch.opcode;
+        // Hot-path optimization: NOP has no side effects beyond PC/cycle update.
+        if (opcode == 0x4E71) {
+            self.pc += 2;
+            return self.finalizeStepCycles(4 + fetch.penalty_cycles);
+        }
         M68k.current_instance = self;
         M68k.decode_fault_addr = null;
         M68k.decode_fault_kind = .Bus;
