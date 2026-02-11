@@ -105,7 +105,7 @@ pub const Memory = struct {
 
     pub fn read16Bus(self: *const Memory, logical_addr: u32, access: BusAccess) !u16 {
         const addr = try self.resolveBusAddress(logical_addr, access);
-        if (self.enforce_alignment and (addr & 1) != 0) return error.BusError;
+        if (self.enforce_alignment and (addr & 1) != 0) return error.AddressError;
         if (addr + 1 >= self.size) return error.BusError;
         const high: u16 = self.data[addr];
         const low: u16 = self.data[addr + 1];
@@ -114,7 +114,7 @@ pub const Memory = struct {
 
     pub fn read32Bus(self: *const Memory, logical_addr: u32, access: BusAccess) !u32 {
         const addr = try self.resolveBusAddress(logical_addr, access);
-        if (self.enforce_alignment and (addr & 1) != 0) return error.BusError;
+        if (self.enforce_alignment and (addr & 1) != 0) return error.AddressError;
         if (addr + 3 >= self.size) return error.BusError;
         const b0: u32 = self.data[addr];
         const b1: u32 = self.data[addr + 1];
@@ -131,7 +131,7 @@ pub const Memory = struct {
 
     pub fn write16Bus(self: *Memory, logical_addr: u32, value: u16, access: BusAccess) !void {
         const addr = try self.resolveBusAddress(logical_addr, access);
-        if (self.enforce_alignment and (addr & 1) != 0) return error.BusError;
+        if (self.enforce_alignment and (addr & 1) != 0) return error.AddressError;
         if (addr + 1 >= self.size) return error.BusError;
         self.data[addr] = @truncate(value >> 8);
         self.data[addr + 1] = @truncate(value & 0xFF);
@@ -139,7 +139,7 @@ pub const Memory = struct {
 
     pub fn write32Bus(self: *Memory, logical_addr: u32, value: u32, access: BusAccess) !void {
         const addr = try self.resolveBusAddress(logical_addr, access);
-        if (self.enforce_alignment and (addr & 1) != 0) return error.BusError;
+        if (self.enforce_alignment and (addr & 1) != 0) return error.AddressError;
         if (addr + 3 >= self.size) return error.BusError;
         self.data[addr] = @truncate(value >> 24);
         self.data[addr + 1] = @truncate((value >> 16) & 0xFF);
@@ -377,4 +377,17 @@ test "Memory bus hook and translator abstraction" {
         .is_write = false,
     });
     try std.testing.expectEqual(@as(u8, 0xAA), data_val);
+}
+
+test "Memory bus alignment violation returns address error" {
+    const allocator = std.testing.allocator;
+    var mem = Memory.initWithConfig(allocator, .{ .enforce_alignment = true });
+    defer mem.deinit();
+
+    const access = BusAccess{
+        .function_code = 0b010,
+        .space = .Data,
+        .is_write = false,
+    };
+    try std.testing.expectError(error.AddressError, mem.read16Bus(0x1001, access));
 }

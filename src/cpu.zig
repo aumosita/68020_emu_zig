@@ -136,11 +136,17 @@ pub const M68k = struct {
                 self.cycles += 50;
                 return 50;
             },
+            error.AddressError => {
+                try self.enterException(3, self.pc, 0, null);
+                self.cycles += 50;
+                return 50;
+            },
             else => return err,
         };
         const opcode = fetch.opcode;
         M68k.current_instance = self;
         M68k.decode_fault_addr = null;
+        M68k.decode_fault_kind = .Bus;
         defer M68k.current_instance = null;
         const instruction = self.decoder.decode(opcode, self.pc, &M68k.globalReadWord) catch |err| switch (err) {
             error.IllegalInstruction => {
@@ -151,21 +157,30 @@ pub const M68k = struct {
             else => return err,
         };
         if (M68k.decode_fault_addr) |fault_addr| {
-            try self.enterBusErrorFrameA(self.pc, fault_addr, .{
-                .function_code = self.getProgramFunctionCode(),
-                .space = .Program,
-                .is_write = false,
-            });
+            if (M68k.decode_fault_kind == .Address) {
+                try self.enterException(3, self.pc, 0, null);
+            } else {
+                try self.enterBusErrorFrameA(self.pc, fault_addr, .{
+                    .function_code = self.getProgramFunctionCode(),
+                    .space = .Program,
+                    .is_write = false,
+                });
+            }
             self.cycles += 50 + fetch.penalty_cycles;
             return 50 + fetch.penalty_cycles;
         }
         const cycles_used = self.executor.execute(self, &instruction) catch |err| switch (err) {
-            error.InvalidAddress, error.AddressError => {
+            error.InvalidAddress => {
                 try self.enterBusErrorFrameA(self.pc, self.pc, .{
                     .function_code = self.dfc,
                     .space = .Data,
                     .is_write = false,
                 });
+                self.cycles += 50 + fetch.penalty_cycles;
+                return 50 + fetch.penalty_cycles;
+            },
+            error.AddressError => {
+                try self.enterException(3, self.pc, 0, null);
                 self.cycles += 50 + fetch.penalty_cycles;
                 return 50 + fetch.penalty_cycles;
             },
@@ -181,7 +196,9 @@ pub const M68k = struct {
     }
     
     threadlocal var current_instance: ?*const M68k = null;
+    const DecodeFaultKind = enum { Bus, Address };
     threadlocal var decode_fault_addr: ?u32 = null;
+    threadlocal var decode_fault_kind: DecodeFaultKind = .Bus;
     
     fn globalReadWord(addr: u32) u16 {
         if (M68k.current_instance) |inst| {
@@ -190,8 +207,12 @@ pub const M68k = struct {
                 .space = .Program,
                 .is_write = false,
             };
-            return inst.memory.read16Bus(addr, access) catch {
+            return inst.memory.read16Bus(addr, access) catch |err| {
                 M68k.decode_fault_addr = addr;
+                M68k.decode_fault_kind = switch (err) {
+                    error.AddressError => .Address,
+                    else => .Bus,
+                };
                 return 0;
             };
         }
@@ -1262,6 +1283,44 @@ test "M68k BKPT handler can consume breakpoint without exception" {
     try std.testing.expectEqual(@as(u32, 0x16E2), m68k.pc);
     try std.testing.expectEqual(@as(u32, 0xB16B00B5), m68k.d[1]);
     try std.testing.expectEqual(@as(u32, 0x38E0), m68k.a[7]); // no exception frame pushed
+}
+
+test "M68k odd instruction fetch raises address error vector 3" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.initWithConfig(allocator, .{ .enforce_alignment = true });
+    defer m68k.deinit();
+
+    try m68k.memory.write32(m68k.getExceptionVector(3), 0x5BE0);
+    m68k.pc = 0x1801;
+    m68k.a[7] = 0x3A80;
+    m68k.setSR(0x2000);
+
+    _ = try m68k.step();
+
+    try std.testing.expectEqual(@as(u32, 0x5BE0), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 0x3A78), m68k.a[7]);
+    try std.testing.expectEqual(@as(u16, 3 * 4), try m68k.memory.read16(0x3A7E));
+    try std.testing.expectEqual(@as(u32, 0x1801), try m68k.memory.read32(0x3A7A));
+}
+
+test "M68k misaligned data word access raises address error vector 3" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.initWithConfig(allocator, .{ .enforce_alignment = true });
+    defer m68k.deinit();
+
+    try m68k.memory.write32(m68k.getExceptionVector(3), 0x5C20);
+    try m68k.memory.write16(0x1820, 0x3080); // MOVE.W D0,(A0)
+    m68k.a[0] = 0x2001; // odd address
+    m68k.pc = 0x1820;
+    m68k.a[7] = 0x3AC0;
+    m68k.setSR(0x2000);
+
+    _ = try m68k.step();
+
+    try std.testing.expectEqual(@as(u32, 0x5C20), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 0x3AB8), m68k.a[7]);
+    try std.testing.expectEqual(@as(u16, 3 * 4), try m68k.memory.read16(0x3ABE));
+    try std.testing.expectEqual(@as(u32, 0x1820), try m68k.memory.read32(0x3ABA));
 }
 
 test "M68k ILLEGAL opcode 0x4AFC enters illegal instruction exception" {
