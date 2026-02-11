@@ -364,6 +364,22 @@ fn executeIllegalInstruction(m: *cpu.M68k) !u32 {
     try m.enterException(4, m.pc, 0, null);
     return 34;
 }
+
+fn isPmmuOpcode(opcode: u16) bool {
+    // 68k coprocessor ID field is encoded at bits [11:9].
+    return ((opcode >> 9) & 0x7) == 0;
+}
+
+fn executePmmuCompatDispatch(m: *cpu.M68k, i: *const decoder.Instruction) ?u32 {
+    if (!m.pmmu_compat_enabled or !isPmmuOpcode(i.opcode)) return null;
+
+    // Minimal PMMU-present compatibility mode:
+    // consume opcode + one extension word and report MMUSR as "no fault".
+    m.pmmu_mmusr = 0;
+    m.pc += 4;
+    return 20;
+}
+
 fn executeCoprocessorDispatch(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     if (m.coprocessor_handler) |handler| {
         const pc_before = m.pc;
@@ -382,6 +398,9 @@ fn executeCoprocessorDispatch(m: *cpu.M68k, i: *const decoder.Instruction) !u32 
             },
             .unavailable => {},
         }
+    }
+    if (executePmmuCompatDispatch(m, i)) |cycles| {
+        return cycles;
     }
     // 0xF-line opcodes trap through Line-1111 emulator vector when coprocessor is absent.
     try m.enterException(11, m.pc, 0, null);

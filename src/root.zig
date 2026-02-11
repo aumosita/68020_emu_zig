@@ -184,6 +184,10 @@ export fn m68k_set_spurious_irq(m68k: *cpu.M68k, level: u8) void {
     }
 }
 
+export fn m68k_set_pmmu_compat(m68k: *cpu.M68k, enabled: bool) void {
+    m68k.setPmmuCompatEnabled(enabled);
+}
+
 export fn m68k_set_pc(m68k: *cpu.M68k, pc: u32) void {
     m68k.pc = pc;
 }

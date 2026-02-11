@@ -30,3 +30,6 @@
 
 - `coprocessor-handler.md`
   코프로세서 핸들러 계약(handled/unavailable/fault)과 회귀 기준
+
+- `pmmu-ready.md`
+  PMMU-ready 최소 호환 레이어(옵션 플래그, 현재 범위, 확장 계획)

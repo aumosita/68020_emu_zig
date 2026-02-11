@@ -30,6 +30,8 @@ pub const M68k = struct {
     msp: u32,
     sfc: u3,
     dfc: u3,
+    pmmu_compat_enabled: bool,
+    pmmu_mmusr: u32,
     pending_irq_level: u3,
     pending_irq_vector: ?u8,
     stopped: bool,
@@ -65,6 +67,8 @@ pub const M68k = struct {
             .msp = 0,
             .sfc = 0,
             .dfc = 0,
+            .pmmu_compat_enabled = false,
+            .pmmu_mmusr = 0,
             .pending_irq_level = 0,
             .pending_irq_vector = null,
             .stopped = false,
@@ -100,6 +104,7 @@ pub const M68k = struct {
         self.pending_irq_level = 0;
         self.pending_irq_vector = null;
         self.stopped = false;
+        self.pmmu_mmusr = 0;
         self.cacr = 0;
         self.caar = 0;
         self.invalidateICache();
@@ -346,6 +351,10 @@ pub const M68k = struct {
     pub fn setBkptHandler(self: *M68k, handler: ?BkptHandler, ctx: ?*anyopaque) void {
         self.bkpt_handler = handler;
         self.bkpt_ctx = ctx;
+    }
+
+    pub fn setPmmuCompatEnabled(self: *M68k, enabled: bool) void {
+        self.pmmu_compat_enabled = enabled;
     }
 
     pub fn setSplitBusCyclePenaltyEnabled(self: *M68k, enabled: bool) void {
@@ -1890,6 +1899,42 @@ test "M68k Line-F opcode enters coprocessor unavailable exception" {
     try std.testing.expectEqual(@as(u32, 0x1500), try m68k.memory.read32(0x36FA)); // faulting PC
     try std.testing.expectEqual(@as(u16, 11 * 4), try m68k.memory.read16(0x36FE)); // vector word
     try std.testing.expect((m68k.sr & M68k.FLAG_S) != 0); // now supervisor
+}
+
+test "M68k PMMU compat mode handles coprocessor-id0 F-line without vector 11" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    m68k.setPmmuCompatEnabled(true);
+    try m68k.memory.write16(0x1540, 0xF000); // coprocessor-id 0
+    try m68k.memory.write16(0x1542, 0x0000); // minimal extension word
+    m68k.pc = 0x1540;
+    m68k.a[7] = 0x3710;
+    m68k.setSR(0x0000); // user mode
+
+    const cycles = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 20), cycles);
+    try std.testing.expectEqual(@as(u32, 0x1544), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 0x3710), m68k.a[7]); // no exception frame
+    try std.testing.expectEqual(@as(u32, 0), m68k.pmmu_mmusr);
+}
+
+test "M68k PMMU compat mode does not intercept non-PMMU coprocessor-id opcodes" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    m68k.setPmmuCompatEnabled(true);
+    try m68k.memory.write32(m68k.getExceptionVector(11), 0x5A40);
+    try m68k.memory.write16(0x1550, 0xF200); // coprocessor-id 1 (non-PMMU)
+    m68k.pc = 0x1550;
+    m68k.a[7] = 0x3720;
+    m68k.setSR(0x0000);
+
+    const cycles = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 34), cycles);
+    try std.testing.expectEqual(@as(u32, 0x5A40), m68k.pc);
 }
 
 test "M68k coprocessor handler can emulate F-line without vector 11" {
