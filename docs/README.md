@@ -39,3 +39,6 @@
 
 - `translation-cache.md`
   address_translator 경로용 소프트웨어 TLB 설계/무효화/검증 포인트
+
+- `platform-layer.md`
+  CPU 외부 PIC/timer/UART stub 설계와 IRQ 주입 경계 계약

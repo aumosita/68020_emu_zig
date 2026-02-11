@@ -2,11 +2,13 @@ const std = @import("std");
 const cpu = @import("cpu.zig");
 const decoder = @import("decoder.zig");
 const memory = @import("memory.zig");
+const platform = @import("platform/mod.zig");
 
 // Export Zig types for use in other Zig code
 pub const M68k = cpu.M68k;
 pub const Decoder = decoder.Decoder;
 pub const Memory = memory.Memory;
+pub const Platform = platform.Platform;
 
 // Export C API for use in other languages (Python, C, etc.)
 // Global page allocator for C API

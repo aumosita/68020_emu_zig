@@ -126,10 +126,10 @@
   - ✅ 파이프라인 모드 플래그(`off/approx/detailed`) 추가(동작 확장 포인트 예약)
   - ✅ 기능 플래그 + 문서화 반영
 
-- 플랫폼 주변장치/PIC 레이어 준비
-  - CPU 외부 모듈로 PIC(priority encoder), timer tick, 최소 UART 스텁 설계
-  - 코어와 플랫폼 경계(IRQ 주입/ack/vector 계약) 문서화
-  - 완료 기준: 샘플 플랫폼 루프에서 주기 IRQ/핸들러 왕복 데모 동작
+- 플랫폼 주변장치/PIC 레이어 준비 ✅(완료)
+  - ✅ CPU 외부 모듈로 PIC(priority encoder), timer tick, 최소 UART 스텁 구현(`src/platform/*`)
+  - ✅ 코어와 플랫폼 경계(IRQ 주입/ack/vector 계약) 문서화(`docs/platform-layer.md`)
+  - ✅ 샘플 플랫폼 루프에서 주기 IRQ/핸들러 왕복 데모 동작(`src/demo_platform_loop.zig`)
 
 - 벤치마크/품질 측정
   - 대표 워크로드 3개 기준 회귀 성능 측정 스크립트 준비

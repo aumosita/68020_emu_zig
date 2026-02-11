@@ -12,6 +12,7 @@ Zig로 작성된 Motorola 68000/68020 CPU 에뮬레이터 코어입니다. 디�
 - I-cache 통계(hit/miss) 조회와 fetch miss penalty 조정 옵션을 제공합니다.
 - 파이프라인 모드 플래그(`off/approx/detailed`)를 추가해 비기본 모델 확장 지점을 고정했습니다.
 - 버스 추상화 계층(`bus hook`, 주소 변환기)을 추가해 PMMU/외부 버스 컨트롤러 연동 지점을 제공했습니다.
+- PIC/timer/UART stub 기반의 플랫폼 레이어와 주기 IRQ 데모 루프를 제공합니다.
 - 명령어 fetch 단계 버스 에러 시 Format A 프레임(vector 2) 생성 경로를 반영했습니다.
 
 ## 범위와 제한
