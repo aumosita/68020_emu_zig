@@ -988,6 +988,73 @@ test "M68k RTE - Return from Exception with 68020 Stack Frame" {
     try std.testing.expectEqual(@as(u16, 0x2700), m68k.sr);
     try std.testing.expectEqual(@as(u32, 0x4000), m68k.pc);
     try std.testing.expectEqual(@as(u32, 0x5018), m68k.a[7]); // SP += 24 (format A)
+
+    // Test Format B (long bus cycle fault, 84 bytes)
+    m68k.a[7] = 0x6000;
+    try m68k.memory.write16(0x6000, 0x2700); // SR
+    try m68k.memory.write32(0x6002, 0x4800); // PC
+    try m68k.memory.write16(0x6006, 0xB008); // Format B, Vector 2
+
+    m68k.pc = 0x100;
+    _ = try m68k.step();
+
+    try std.testing.expectEqual(@as(u16, 0x2700), m68k.sr);
+    try std.testing.expectEqual(@as(u32, 0x4800), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 0x6054), m68k.a[7]); // SP += 84 (format B)
+}
+
+test "M68k RTE privilege violation in user mode" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    try m68k.memory.write32(m68k.getExceptionVector(8), 0x5A00);
+    try m68k.memory.write16(0x1100, 0x4E73); // RTE
+    m68k.pc = 0x1100;
+    m68k.a[7] = 0x3400;
+    m68k.setSR(0x0000); // user mode
+
+    _ = try m68k.step();
+
+    try std.testing.expectEqual(@as(u32, 0x5A00), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 0x33F8), m68k.a[7]);
+    try std.testing.expectEqual(@as(u16, 0x0000), try m68k.memory.read16(0x33F8));
+    try std.testing.expectEqual(@as(u32, 0x1100), try m68k.memory.read32(0x33FA));
+    try std.testing.expectEqual(@as(u16, 8 * 4), try m68k.memory.read16(0x33FE));
+}
+
+test "M68k nested TRAP exceptions unwind correctly with RTE" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    // Main code: TRAP #0
+    try m68k.memory.write16(0x1200, 0x4E40);
+    // Vector 32 handler: TRAP #1, then RTE
+    try m68k.memory.write32(m68k.getExceptionVector(32), 0x4000);
+    try m68k.memory.write16(0x4000, 0x4E41);
+    try m68k.memory.write16(0x4002, 0x4E73);
+    // Vector 33 handler: RTE
+    try m68k.memory.write32(m68k.getExceptionVector(33), 0x5000);
+    try m68k.memory.write16(0x5000, 0x4E73);
+
+    m68k.pc = 0x1200;
+    m68k.a[7] = 0x3800;
+    m68k.setSR(0x0000); // user mode
+
+    _ = try m68k.step(); // TRAP #0 -> handler 0x4000
+    try std.testing.expectEqual(@as(u32, 0x4000), m68k.pc);
+
+    _ = try m68k.step(); // TRAP #1 inside handler -> handler 0x5000
+    try std.testing.expectEqual(@as(u32, 0x5000), m68k.pc);
+
+    _ = try m68k.step(); // RTE from nested trap -> back to 0x4002
+    try std.testing.expectEqual(@as(u32, 0x4002), m68k.pc);
+
+    _ = try m68k.step(); // outer RTE -> back to user code after TRAP #0
+    try std.testing.expectEqual(@as(u32, 0x1202), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 0x3800), m68k.a[7]);
+    try std.testing.expectEqual(@as(u16, 0x0000), m68k.sr);
 }
 
 test "M68k TRAP - Exception with Format/Vector Word" {

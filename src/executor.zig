@@ -297,6 +297,10 @@ fn executeLea(m: *cpu.M68k, i: *const decoder.Instruction) !u32 { const r = swit
 fn executeRts(m: *cpu.M68k) !u32 { m.pc = try m.memory.read32(m.a[7]); m.a[7] += 4; return 16; }
 fn executeRtr(m: *cpu.M68k) !u32 { const ccr = try m.memory.read16(m.a[7]); m.sr = (m.sr & 0xFF00) | (ccr & 0xFF); m.pc = try m.memory.read32(m.a[7] + 2); m.a[7] += 6; return 20; }
 fn executeRte(m: *cpu.M68k) !u32 { 
+    if (!m.getFlag(cpu.M68k.FLAG_S)) {
+        try m.enterException(8, m.pc, 0, null);
+        return 34;
+    }
     const sp = m.a[7]; 
     const sr = try m.memory.read16(sp);
     const pc = try m.memory.read32(sp + 2);
