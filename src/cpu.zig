@@ -696,10 +696,11 @@ test "M68k RTE - Return from Exception" {
     try m68k.memory.write16(0x2006, 0x0000);
     try m68k.memory.write16(0x1000, 0x4E73);
     m68k.pc = 0x1000;
-    _ = try m68k.step();
+    const cycles = try m68k.step();
     try std.testing.expectEqual(@as(u16, 0x0015), m68k.sr);
     try std.testing.expectEqual(@as(u32, 0x4000), m68k.pc);
     try std.testing.expectEqual(@as(u32, 0x2008), m68k.a[7]);
+    try std.testing.expectEqual(@as(u32, 20), cycles);
 }
 
 test "M68k TRAP - Software Interrupt" {
@@ -712,11 +713,12 @@ test "M68k TRAP - Software Interrupt" {
     m68k.sr = 0x0000;
     try m68k.memory.write16(0x1000, 0x4E40);
     m68k.pc = 0x1000;
-    _ = try m68k.step();
+    const cycles = try m68k.step();
     const sp = 0x3000 - 8;
     try std.testing.expectEqual(@as(u16, 0x0000), try m68k.memory.read16(sp));
     try std.testing.expectEqual(@as(u32, 0x1002), try m68k.memory.read32(sp + 2));
     try std.testing.expectEqual(@as(u32, 0x5000), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 34), cycles);
 }
 
 test "M68k bus error during instruction fetch creates format A frame" {
@@ -1214,11 +1216,12 @@ test "M68k RTE - Return from Exception with 68020 Stack Frame" {
     // RTE - opcode: 0x4E73
     try m68k.memory.write16(0x100, 0x4E73);
     m68k.pc = 0x100;
-    _ = try m68k.step();
+    const format0_cycles = try m68k.step();
     
     try std.testing.expectEqual(@as(u16, 0x2700), m68k.sr);
     try std.testing.expectEqual(@as(u32, 0x1000), m68k.pc);
     try std.testing.expectEqual(@as(u32, 0x2008), m68k.a[7]); // SP += 8 (format 0)
+    try std.testing.expectEqual(@as(u32, 20), format0_cycles);
     
     // Test Format 2 (6-word format, 12 bytes)
     m68k.a[7] = 0x3000;
@@ -1227,11 +1230,12 @@ test "M68k RTE - Return from Exception with 68020 Stack Frame" {
     try m68k.memory.write16(0x3006, 0x201C); // Format 2, Vector 7 (TRAPV)
     
     m68k.pc = 0x100;
-    _ = try m68k.step();
+    const format2_cycles = try m68k.step();
     
     try std.testing.expectEqual(@as(u16, 0x2000), m68k.sr);
     try std.testing.expectEqual(@as(u32, 0x2000), m68k.pc);
     try std.testing.expectEqual(@as(u32, 0x300C), m68k.a[7]); // SP += 12 (format 2)
+    try std.testing.expectEqual(@as(u32, 20), format2_cycles);
 
     // Test Format 9 (coprocessor mid-instruction, 20 bytes)
     m68k.a[7] = 0x4000;
@@ -1240,11 +1244,12 @@ test "M68k RTE - Return from Exception with 68020 Stack Frame" {
     try m68k.memory.write16(0x4006, 0x902C); // Format 9, Vector 11
 
     m68k.pc = 0x100;
-    _ = try m68k.step();
+    const format9_cycles = try m68k.step();
 
     try std.testing.expectEqual(@as(u16, 0x2100), m68k.sr);
     try std.testing.expectEqual(@as(u32, 0x3000), m68k.pc);
     try std.testing.expectEqual(@as(u32, 0x4014), m68k.a[7]); // SP += 20 (format 9)
+    try std.testing.expectEqual(@as(u32, 20), format9_cycles);
 
     // Test Format A (short bus cycle fault, 24 bytes)
     m68k.a[7] = 0x5000;
@@ -2255,19 +2260,21 @@ test "M68k TRAPV traps only when V flag is set" {
     m68k.a[7] = 0x4000;
     m68k.setSR(0x2000);
     m68k.setFlag(M68k.FLAG_V, false);
-    _ = try m68k.step();
+    const no_trap_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0x702), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 4), no_trap_cycles);
 
     // V=1: trap to vector 7
     m68k.pc = 0x700;
     m68k.a[7] = 0x4100;
     m68k.setSR(0x2000);
     m68k.setFlag(M68k.FLAG_V, true);
-    _ = try m68k.step();
+    const trap_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0x7200), m68k.pc);
     try std.testing.expectEqual(@as(u32, 0x40F8), m68k.a[7]);
     try std.testing.expectEqual(@as(u32, 0x702), try m68k.memory.read32(0x40FA)); // return PC
     try std.testing.expectEqual(@as(u16, 7 * 4), try m68k.memory.read16(0x40FE));
+    try std.testing.expectEqual(@as(u32, 34), trap_cycles);
 }
 
 test "M68k STOP halts until interrupt and resumes on IRQ" {
@@ -2337,8 +2344,9 @@ test "M68k RESET in supervisor mode advances PC" {
     try m68k.memory.write16(0xB000, 0x4E70); // RESET
     m68k.pc = 0xB000;
     m68k.setSR(0x2000);
-    _ = try m68k.step();
+    const cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0xB002), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 132), cycles);
 }
 
 test "M68k TRAPcc decode forms and return PC sizing" {
@@ -2354,19 +2362,21 @@ test "M68k TRAPcc decode forms and return PC sizing" {
     m68k.pc = 0xC100;
     m68k.a[7] = 0x4500;
     m68k.setSR(0x2000);
-    _ = try m68k.step();
+    const false_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0xC102), m68k.pc);
     try std.testing.expectEqual(@as(u32, 0x4500), m68k.a[7]);
+    try std.testing.expectEqual(@as(u32, 3), false_cycles);
 
     // 0x50FC = TRAPT (no extension), return PC must be +2.
     try m68k.memory.write16(0xC200, 0x50FC);
     m68k.pc = 0xC200;
     m68k.a[7] = 0x4600;
     m68k.setSR(0x2000);
-    _ = try m68k.step();
+    const trap_short_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0xC000), m68k.pc);
     try std.testing.expectEqual(@as(u32, 0x45F8), m68k.a[7]);
     try std.testing.expectEqual(@as(u32, 0xC202), try m68k.memory.read32(0x45FA));
+    try std.testing.expectEqual(@as(u32, 33), trap_short_cycles);
 
     // 0x50FA = TRAPT.W #imm16, return PC must be +4.
     try m68k.memory.write16(0xC300, 0x50FA);
@@ -2374,10 +2384,11 @@ test "M68k TRAPcc decode forms and return PC sizing" {
     m68k.pc = 0xC300;
     m68k.a[7] = 0x4700;
     m68k.setSR(0x2000);
-    _ = try m68k.step();
+    const trap_word_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0xC000), m68k.pc);
     try std.testing.expectEqual(@as(u32, 0x46F8), m68k.a[7]);
     try std.testing.expectEqual(@as(u32, 0xC304), try m68k.memory.read32(0x46FA));
+    try std.testing.expectEqual(@as(u32, 33), trap_word_cycles);
 
     // 0x50FB = TRAPT.L #imm32, return PC must be +6.
     try m68k.memory.write16(0xC400, 0x50FB);
@@ -2385,10 +2396,11 @@ test "M68k TRAPcc decode forms and return PC sizing" {
     m68k.pc = 0xC400;
     m68k.a[7] = 0x4800;
     m68k.setSR(0x2000);
-    _ = try m68k.step();
+    const trap_long_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0xC000), m68k.pc);
     try std.testing.expectEqual(@as(u32, 0x47F8), m68k.a[7]);
     try std.testing.expectEqual(@as(u32, 0xC406), try m68k.memory.read32(0x47FA));
+    try std.testing.expectEqual(@as(u32, 33), trap_long_cycles);
 }
 
 test "M68k decode IllegalInstruction error is routed to vector 4 exception" {
@@ -2403,12 +2415,13 @@ test "M68k decode IllegalInstruction error is routed to vector 4 exception" {
     m68k.pc = 0xD000;
     m68k.a[7] = 0x4900;
     m68k.setSR(0x0000);
-    _ = try m68k.step();
+    const cycles = try m68k.step();
 
     try std.testing.expectEqual(@as(u32, 0xD100), m68k.pc);
     try std.testing.expectEqual(@as(u32, 0x48F8), m68k.a[7]);
     try std.testing.expectEqual(@as(u16, 4 * 4), try m68k.memory.read16(0x48FE));
     try std.testing.expectEqual(@as(u32, 0xD000), try m68k.memory.read32(0x48FA));
+    try std.testing.expectEqual(@as(u32, 34), cycles);
 }
 
 test "M68k illegal CALLM encodings are routed to vector 4 exception" {
@@ -2423,22 +2436,24 @@ test "M68k illegal CALLM encodings are routed to vector 4 exception" {
     m68k.pc = 0xD200;
     m68k.a[7] = 0x4A80;
     m68k.setSR(0x2000);
-    _ = try m68k.step();
+    const mode3_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0xD300), m68k.pc);
     try std.testing.expectEqual(@as(u32, 0x4A78), m68k.a[7]);
     try std.testing.expectEqual(@as(u32, 0xD200), try m68k.memory.read32(0x4A7A));
     try std.testing.expectEqual(@as(u16, 4 * 4), try m68k.memory.read16(0x4A7E));
+    try std.testing.expectEqual(@as(u32, 34), mode3_cycles);
 
     // mode=7, reg>3 is illegal for CALLM.
     try m68k.memory.write16(0xD210, 0x06FC);
     m68k.pc = 0xD210;
     m68k.a[7] = 0x4B00;
     m68k.setSR(0x2000);
-    _ = try m68k.step();
+    const mode7_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0xD300), m68k.pc);
     try std.testing.expectEqual(@as(u32, 0x4AF8), m68k.a[7]);
     try std.testing.expectEqual(@as(u32, 0xD210), try m68k.memory.read32(0x4AFA));
     try std.testing.expectEqual(@as(u16, 4 * 4), try m68k.memory.read16(0x4AFE));
+    try std.testing.expectEqual(@as(u32, 34), mode7_cycles);
 }
 
 test "M68k ORI/ANDI/EORI to CCR and SR semantics" {

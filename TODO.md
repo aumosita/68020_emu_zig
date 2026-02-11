@@ -72,6 +72,7 @@
   - 진행: bitfield 명령의 reg/mem 오퍼랜드별 비용 반영 + 회귀 테스트 추가
   - 진행: 예외/트랩 경로(Illegal/LineA/LineF/BKPT/AddressError/Privilege) cycle assertion 회귀 확장
   - 진행: fault subtype(`instruction fetch=50`, `decode ext fetch=52`, `execute data access=54`) 세분화 + 회귀 반영
+  - 진행: `TRAP/TRAPV/RESET(supervisor)/TRAPcc/RTE/illegal decode` 고정 cycle assertion 회귀 추가
   - 잔여: 핵심 명령 cycle 회귀 테스트 범위 확장
 
 - `MOVEM` 비용 모델 세분화 ✅(완료)
