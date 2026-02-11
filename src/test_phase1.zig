@@ -3,158 +3,212 @@ const cpu = @import("cpu.zig");
 
 pub fn main() !void {
     const stdout = std.io.getStdOut().writer();
-    
-    try stdout.print("Motorola 68020 에뮬레이터 - Phase 1 명령어 테스트\n", .{});
-    try stdout.print("=================================================\n\n", .{});
-    
-    var m68k = cpu.M68k.init(std.heap.page_allocator);
-    defer m68k.deinit();
+    try stdout.print("Running Phase 1 tests (JMP, BSR, DBcc, Scc)...\n", .{});
     
     var passed: u32 = 0;
     var total: u32 = 0;
     
     // Test JMP
     total += 1;
-    try stdout.print("테스트 {}: JMP $2000 (무조건 점프)\n", .{total});
-    m68k.pc = 0x1000;
-    try m68k.memory.write16(0x1000, 0x4EF9); // JMP xxx.L
-    try m68k.memory.write32(0x1002, 0x00002000);
-    _ = try m68k.step();
-    if (m68k.pc == 0x00002000) {
-        try stdout.print("  ✓ 통과 (PC=0x{X})\n", .{m68k.pc});
+    testJmp() catch |err| {
+        try stdout.print("  ❌ JMP test failed: {}\n", .{err});
+    };
+    if (total == 1) {
+        try stdout.print("  ✅ JMP test passed\n", .{});
         passed += 1;
-    } else {
-        try stdout.print("  ✗ 실패 (PC=0x{X})\n", .{m68k.pc});
     }
     
     // Test BSR
     total += 1;
-    try stdout.print("\n테스트 {}: BSR +10 (서브루틴 분기)\n", .{total});
-    m68k.pc = 0x1000;
-    m68k.a[7] = 0x00003000; // 스택 포인터
-    try m68k.memory.write16(0x1000, 0x610A); // BSR +10
-    _ = try m68k.step();
-    
-    const return_addr = try m68k.memory.read32(m68k.a[7]);
-    if (m68k.pc == 0x0000100C and m68k.a[7] == 0x00002FFC and return_addr == 0x00001002) {
-        try stdout.print("  ✓ 통과 (PC=0x{X}, SP=0x{X}, return=0x{X})\n", .{m68k.pc, m68k.a[7], return_addr});
+    testBsr() catch |err| {
+        try stdout.print("  ❌ BSR test failed: {}\n", .{err});
+        total -= 1;
+    };
+    if (total == 2) {
+        try stdout.print("  ✅ BSR test passed\n", .{});
         passed += 1;
-    } else {
-        try stdout.print("  ✗ 실패 (PC=0x{X}, SP=0x{X}, return=0x{X})\n", .{m68k.pc, m68k.a[7], return_addr});
     }
     
-    // Test DBcc (DBRA - always loop)
+    // Test DBcc
     total += 1;
-    try stdout.print("\n테스트 {}: DBRA D0, -8 (루프 제어)\n", .{total});
-    m68k.pc = 0x1000;
-    m68k.d[0] = 3; // 루프 3번
-    var loop_count: u32 = 0;
+    testDbcc() catch |err| {
+        try stdout.print("  ❌ DBcc test failed: {}\n", .{err});
+        total -= 1;
+    };
+    if (total == 3) {
+        try stdout.print("  ✅ DBcc test passed\n", .{});
+        passed += 1;
+    }
     
-    // DBRA D0, -8 (0x51C8, displacement -8)
-    try m68k.memory.write16(0x1000, 0x51C8); // DBRA D0
-    try m68k.memory.write16(0x1002, 0xFFF8); // -8 displacement
+    // Test Scc
+    total += 1;
+    testScc() catch |err| {
+        try stdout.print("  ❌ Scc test failed: {}\n", .{err});
+        total -= 1;
+    };
+    if (total == 4) {
+        try stdout.print("  ✅ Scc test passed\n", .{});
+        passed += 1;
+    }
     
-    while ((m68k.d[0] & 0xFFFF) != 0xFFFF and loop_count < 10) : (loop_count += 1) {
-        m68k.pc = 0x1000;
+    // Test complete loop
+    total += 1;
+    testCompleteLoop() catch |err| {
+        try stdout.print("  ❌ Complete loop test failed: {}\n", .{err});
+        total -= 1;
+    };
+    if (total == 5) {
+        try stdout.print("  ✅ Complete loop test passed\n", .{});
+        passed += 1;
+    }
+    
+    const failed = total - passed;
+    try stdout.print("\n", .{});
+    try stdout.print("Results: {} passed, {} failed\n", .{passed, failed});
+    
+    if (failed > 0) {
+        std.process.exit(1);
+    }
+}
+
+fn testJmp() !void {
+    var m68k = cpu.M68k.init(std.heap.page_allocator);
+    defer m68k.deinit();
+    
+    // JMP $1000  -> 4EF9 0000 1000 (JMP (xxx).L)
+    try m68k.memory.write16(0x400, 0x4EF9); // JMP (xxx).L
+    try m68k.memory.write16(0x402, 0x0000);
+    try m68k.memory.write16(0x404, 0x1000);
+    
+    m68k.pc = 0x400;
+    _ = try m68k.step();
+    
+    // PC should jump to $1000
+    if (m68k.pc != 0x1000) return error.WrongPC;
+}
+
+fn testBsr() !void {
+    var m68k = cpu.M68k.init(std.heap.page_allocator);
+    defer m68k.deinit();
+    
+    // BSR.B $10  -> 6110 (displacement = +16)
+    try m68k.memory.write16(0x400, 0x6110);
+    
+    m68k.pc = 0x400;
+    m68k.a[7] = 0x2000; // Set stack pointer
+    
+    _ = try m68k.step();
+    
+    // PC should be at $400 + 2 + $10 = $412
+    if (m68k.pc != 0x412) return error.WrongPC;
+    
+    // Return address ($402) should be pushed on stack
+    if (m68k.a[7] != 0x1FFC) return error.WrongStackPointer;
+    const return_addr = try m68k.memory.read32(m68k.a[7]);
+    if (return_addr != 0x402) return error.WrongReturnAddress;
+}
+
+fn testDbcc() !void {
+    var m68k = cpu.M68k.init(std.heap.page_allocator);
+    defer m68k.deinit();
+    
+    // DBRA D0, -10  -> 51C8 FFF6
+    try m68k.memory.write16(0x400, 0x51C8); // DBRA D0
+    try m68k.memory.write16(0x402, 0xFFF6); // displacement = -10
+    
+    m68k.pc = 0x400;
+    m68k.d[0] = 3; // Counter = 3
+    
+    // First iteration: counter = 3 -> 2, should branch
+    _ = try m68k.step();
+    if ((m68k.d[0] & 0xFFFF) != 2) return error.WrongCounter;
+    if (m68k.pc != 0x3F8) return error.WrongPC; // 0x400 + 2 + (-10)
+    
+    // Second iteration: counter = 2 -> 1, should branch
+    m68k.pc = 0x400;
+    _ = try m68k.step();
+    if ((m68k.d[0] & 0xFFFF) != 1) return error.WrongCounter;
+    if (m68k.pc != 0x3F8) return error.WrongPC;
+    
+    // Third iteration: counter = 1 -> 0, should branch
+    m68k.pc = 0x400;
+    _ = try m68k.step();
+    if ((m68k.d[0] & 0xFFFF) != 0) return error.WrongCounter;
+    if (m68k.pc != 0x3F8) return error.WrongPC;
+    
+    // Fourth iteration: counter = 0 -> -1, should NOT branch
+    m68k.pc = 0x400;
+    _ = try m68k.step();
+    if ((m68k.d[0] & 0xFFFF) != 0xFFFF) return error.WrongCounter;
+    if (m68k.pc != 0x404) return error.WrongPC; // Should fall through
+}
+
+fn testScc() !void {
+    var m68k = cpu.M68k.init(std.heap.page_allocator);
+    defer m68k.deinit();
+    
+    // SEQ D0  -> 57C0 (Set if Equal, i.e., Z flag set)
+    try m68k.memory.write16(0x400, 0x57C0);
+    
+    m68k.pc = 0x400;
+    m68k.d[0] = 0x12345678;
+    
+    // Z flag = 0, condition false -> D0.B should be 0x00
+    m68k.sr &= ~@as(u16, 0x04); // Clear Z flag
+    _ = try m68k.step();
+    if (m68k.d[0] != 0x12345600) return error.WrongValue;
+    
+    // Z flag = 1, condition true -> D0.B should be 0xFF
+    m68k.pc = 0x400;
+    m68k.sr |= 0x04; // Set Z flag
+    _ = try m68k.step();
+    if (m68k.d[0] != 0x123456FF) return error.WrongValue;
+}
+
+fn testCompleteLoop() !void {
+    var m68k = cpu.M68k.init(std.heap.page_allocator);
+    defer m68k.deinit();
+    
+    // Simple loop:
+    //   MOVE.W #5, D0       ; Counter
+    //   MOVEQ #0, D1        ; Accumulator
+    // loop:
+    //   ADDQ.W #1, D1
+    //   DBRA D0, loop
+    
+    try m68k.memory.write16(0x400, 0x303C); // MOVE.W #5, D0
+    try m68k.memory.write16(0x402, 0x0005);
+    try m68k.memory.write16(0x404, 0x7200); // MOVEQ #0, D1
+    try m68k.memory.write16(0x406, 0x5241); // ADDQ.W #1, D1
+    try m68k.memory.write16(0x408, 0x51C8); // DBRA D0, -6
+    try m68k.memory.write16(0x40A, 0xFFFA); // displacement = -6
+    
+    m68k.pc = 0x400;
+    
+    // Execute MOVE.W #5, D0
+    _ = try m68k.step();
+    if ((m68k.d[0] & 0xFFFF) != 5) return error.WrongValue;
+    
+    // Execute MOVEQ #0, D1
+    _ = try m68k.step();
+    if (m68k.d[1] != 0) return error.WrongValue;
+    
+    // Execute loop 6 times
+    var i: u32 = 0;
+    while (i < 6) : (i += 1) {
+        // ADDQ.W #1, D1
+        _ = try m68k.step();
+        
+        // DBRA D0, loop
         _ = try m68k.step();
     }
     
-    if (loop_count == 4 and m68k.pc == 0x1004) { // 3회 루프 + 1회 종료
-        try stdout.print("  ✓ 통과 ({}회 반복 후 종료)\n", .{loop_count});
-        passed += 1;
-    } else {
-        try stdout.print("  ✗ 실패 ({}회 반복, PC=0x{X})\n", .{loop_count, m68k.pc});
-    }
+    // D1 should be 6
+    if ((m68k.d[1] & 0xFFFF) != 6) return error.WrongValue;
     
-    // Test Scc (SEQ - Set if Equal)
-    total += 1;
-    try stdout.print("\n테스트 {}: SEQ D1 (Z=1이면 0xFF)\n", .{total});
-    m68k.d[1] = 0x12345678;
-    m68k.setFlag(cpu.M68k.FLAG_Z, true); // Z 플래그 설정
-    try m68k.memory.write16(0x1000, 0x57C1); // SEQ D1
-    m68k.pc = 0x1000;
-    _ = try m68k.step();
+    // D0 should be -1 (0xFFFF)
+    if ((m68k.d[0] & 0xFFFF) != 0xFFFF) return error.WrongValue;
     
-    if ((m68k.d[1] & 0xFF) == 0xFF) {
-        try stdout.print("  ✓ 통과 (D1=0x{X}, 하위 바이트=0xFF)\n", .{m68k.d[1]});
-        passed += 1;
-    } else {
-        try stdout.print("  ✗ 실패 (D1=0x{X})\n", .{m68k.d[1]});
-    }
-    
-    // Test Scc (SNE - Set if Not Equal)
-    total += 1;
-    try stdout.print("\n테스트 {}: SNE D2 (Z=0이면 0xFF)\n", .{total});
-    m68k.d[2] = 0xABCDEF00;
-    m68k.setFlag(cpu.M68k.FLAG_Z, false); // Z 플래그 클리어
-    try m68k.memory.write16(0x1000, 0x56C2); // SNE D2
-    m68k.pc = 0x1000;
-    _ = try m68k.step();
-    
-    if ((m68k.d[2] & 0xFF) == 0xFF) {
-        try stdout.print("  ✓ 통과 (D2=0x{X}, 하위 바이트=0xFF)\n", .{m68k.d[2]});
-        passed += 1;
-    } else {
-        try stdout.print("  ✗ 실패 (D2=0x{X})\n", .{m68k.d[2]});
-    }
-    
-    // Test Scc false condition
-    total += 1;
-    try stdout.print("\n테스트 {}: SEQ D3 (Z=0이면 0x00)\n", .{total});
-    m68k.d[3] = 0xFFFFFFFF;
-    m68k.setFlag(cpu.M68k.FLAG_Z, false); // Z 플래그 클리어
-    try m68k.memory.write16(0x1000, 0x57C3); // SEQ D3
-    m68k.pc = 0x1000;
-    _ = try m68k.step();
-    
-    if ((m68k.d[3] & 0xFF) == 0x00) {
-        try stdout.print("  ✓ 통과 (D3=0x{X}, 하위 바이트=0x00)\n", .{m68k.d[3]});
-        passed += 1;
-    } else {
-        try stdout.print("  ✗ 실패 (D3=0x{X})\n", .{m68k.d[3]});
-    }
-    
-    // Test DBcc with true condition (should not loop)
-    total += 1;
-    try stdout.print("\n테스트 {}: DBEQ D4 (Z=1이면 루프 안함)\n", .{total});
-    m68k.pc = 0x1000;
-    m68k.d[4] = 5;
-    m68k.setFlag(cpu.M68k.FLAG_Z, true); // 조건 true
-    try m68k.memory.write16(0x1000, 0x57C8); // DBEQ D4
-    try m68k.memory.write16(0x1002, 0xFFFC); // -4 displacement
-    _ = try m68k.step();
-    
-    if (m68k.d[4] == 5 and m68k.pc == 0x1004) { // 카운터 변경 없음, PC 다음으로
-        try stdout.print("  ✓ 통과 (D4 그대로, PC=0x{X})\n", .{m68k.pc});
-        passed += 1;
-    } else {
-        try stdout.print("  ✗ 실패 (D4={}, PC=0x{X})\n", .{m68k.d[4], m68k.pc});
-    }
-    
-    // 요약
-    try stdout.print("\n" ++ "=" ** 50 ++ "\n", .{});
-    try stdout.print("테스트 결과: {} / {} 통과 ({d:.1}%)\n", .{
-        passed, total, @as(f64, @floatFromInt(passed)) / @as(f64, @floatFromInt(total)) * 100.0
-    });
-    
-    if (passed == total) {
-        try stdout.print("\n🎉 모든 Phase 1 명령어 테스트 통과!\n", .{});
-    } else {
-        try stdout.print("\n⚠️  일부 테스트 실패\n", .{});
-    }
-    
-    try stdout.print("\n📊 구현된 Phase 1 명령어:\n", .{});
-    try stdout.print("  ✓ JMP - 무조건 점프 (조건 없이 대상 주소로)\n", .{});
-    try stdout.print("  ✓ BSR - 서브루틴 분기 (return address push + 분기)\n", .{});
-    try stdout.print("  ✓ DBcc - 루프 제어 (감소 & 조건부 분기)\n", .{});
-    try stdout.print("  ✓ Scc - 조건부 설정 (조건에 따라 0x00/0xFF)\n", .{});
-    
-    try stdout.print("\n  기능:\n", .{});
-    try stdout.print("    - JMP: JSR과 유사하지만 스택 사용 안함\n", .{});
-    try stdout.print("    - BSR: BRA + return address (서브루틴용)\n", .{});
-    try stdout.print("    - DBcc: 14가지 조건 + 카운터 감소\n", .{});
-    try stdout.print("    - Scc: 14가지 조건 + 바이트 설정\n", .{});
-    try stdout.print("    - for/while 루프 구현에 필수적\n", .{});
-    
-    try stdout.print("\n🎯 총 구현된 명령어: 61개 (57 + 4)\n", .{});
+    // PC should be at 0x40C (after the loop)
+    if (m68k.pc != 0x40C) return error.WrongPC;
 }

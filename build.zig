@@ -66,6 +66,51 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     b.installArtifact(phase1_test);
+    
+    // Phase 2 test executable
+    const phase2_test = b.addExecutable(.{
+        .name = "m68020-emu-test-phase2",
+        .root_source_file = b.path("src/test_phase2.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    b.installArtifact(phase2_test);
+    
+    // Phase 3 test executable
+    const phase3_test = b.addExecutable(.{
+        .name = "m68020-emu-test-phase3",
+        .root_source_file = b.path("src/test_phase3.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    b.installArtifact(phase3_test);
+    
+    // BCD test executable
+    const bcd_test = b.addExecutable(.{
+        .name = "m68020-emu-test-bcd",
+        .root_source_file = b.path("src/test_bcd.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    b.installArtifact(bcd_test);
+    
+    // 68020 test executable
+    const test_68020 = b.addExecutable(.{
+        .name = "m68020-emu-test-68020",
+        .root_source_file = b.path("src/test_68020.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    b.installArtifact(test_68020);
+    
+    // Cycle accurate demo
+    const cycle_demo = b.addExecutable(.{
+        .name = "cycle-accurate-demo",
+        .root_source_file = b.path("src/test_cycle_accurate.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    b.installArtifact(cycle_demo);
 
     // Run step
     const run_cmd = b.addRunArtifact(exe);
@@ -93,6 +138,42 @@ pub fn build(b: *std.Build) void {
     run_stack.step.dependOn(b.getInstallStep());
     const run_stack_step = b.step("test-stack", "Run stack operation tests");
     run_stack_step.dependOn(&run_stack.step);
+    
+    // Run Phase 1 test step
+    const run_phase1 = b.addRunArtifact(phase1_test);
+    run_phase1.step.dependOn(b.getInstallStep());
+    const run_phase1_step = b.step("test-phase1", "Run Phase 1 (JMP/BSR/DBcc/Scc) tests");
+    run_phase1_step.dependOn(&run_phase1.step);
+    
+    // Run Phase 2 test step
+    const run_phase2 = b.addRunArtifact(phase2_test);
+    run_phase2.step.dependOn(b.getInstallStep());
+    const run_phase2_step = b.step("test-phase2", "Run Phase 2 (RTR/RTE/TRAP/TAS) tests");
+    run_phase2_step.dependOn(&run_phase2.step);
+    
+    // Run Phase 3 test step
+    const run_phase3 = b.addRunArtifact(phase3_test);
+    run_phase3.step.dependOn(b.getInstallStep());
+    const run_phase3_step = b.step("test-phase3", "Run Phase 3 (EXG/CMPM/CHK) tests");
+    run_phase3_step.dependOn(&run_phase3.step);
+    
+    // Run BCD test step
+    const run_bcd = b.addRunArtifact(bcd_test);
+    run_bcd.step.dependOn(b.getInstallStep());
+    const run_bcd_step = b.step("test-bcd", "Run BCD (ABCD/SBCD/NBCD) tests");
+    run_bcd_step.dependOn(&run_bcd.step);
+    
+    // Run 68020 test step
+    const run_68020 = b.addRunArtifact(test_68020);
+    run_68020.step.dependOn(b.getInstallStep());
+    const run_68020_step = b.step("test-68020", "Run 68020 exclusive instruction tests");
+    run_68020_step.dependOn(&run_68020.step);
+    
+    // Run cycle accurate demo
+    const run_cycle_demo = b.addRunArtifact(cycle_demo);
+    run_cycle_demo.step.dependOn(b.getInstallStep());
+    const run_cycle_demo_step = b.step("demo-cycles", "Run cycle-accurate demo");
+    run_cycle_demo_step.dependOn(&run_cycle_demo.step);
 
     // Unit tests
     const lib_unit_tests = b.addTest(.{
