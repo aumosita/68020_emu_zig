@@ -469,6 +469,72 @@ test "M68k BFCLR - Bit Field Clear" {
     try std.testing.expectEqual(@as(u32, 0xFFFF00FF), m68k.d[1]);
 }
 
+test "M68k RTE - Return from Exception with 68020 Stack Frame" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+    
+    // Test Format 0 (short format, 8 bytes)
+    m68k.a[7] = 0x2000;
+    try m68k.memory.write16(0x2000, 0x2700); // SR (supervisor mode)
+    try m68k.memory.write32(0x2002, 0x1000); // PC
+    try m68k.memory.write16(0x2006, 0x0018); // Format 0, Vector 6 (CHK)
+    
+    // RTE - opcode: 0x4E73
+    try m68k.memory.write16(0x100, 0x4E73);
+    m68k.pc = 0x100;
+    _ = try m68k.step();
+    
+    try std.testing.expectEqual(@as(u16, 0x2700), m68k.sr);
+    try std.testing.expectEqual(@as(u32, 0x1000), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 0x2008), m68k.a[7]); // SP += 8 (format 0)
+    
+    // Test Format 2 (6-word format, 12 bytes)
+    m68k.a[7] = 0x3000;
+    try m68k.memory.write16(0x3000, 0x2000); // SR
+    try m68k.memory.write32(0x3002, 0x2000); // PC
+    try m68k.memory.write16(0x3006, 0x201C); // Format 2, Vector 7 (TRAPV)
+    
+    m68k.pc = 0x100;
+    _ = try m68k.step();
+    
+    try std.testing.expectEqual(@as(u16, 0x2000), m68k.sr);
+    try std.testing.expectEqual(@as(u32, 0x2000), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 0x300C), m68k.a[7]); // SP += 12 (format 2)
+}
+
+test "M68k TRAP - Exception with Format/Vector Word" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+    
+    // Setup exception vector for TRAP #5 (vector 37 = 0x94)
+    try m68k.memory.write32(37 * 4, 0x5000); // Exception handler at 0x5000
+    
+    m68k.a[7] = 0x2000; // Stack pointer
+    m68k.sr = 0x2700;
+    
+    // TRAP #5 - opcode: 0x4E45
+    try m68k.memory.write16(0x100, 0x4E45);
+    m68k.pc = 0x100;
+    _ = try m68k.step();
+    
+    // Check stack frame
+    try std.testing.expectEqual(@as(u16, 0x2700), try m68k.memory.read16(0x1FF8)); // SR
+    try std.testing.expectEqual(@as(u32, 0x0102), try m68k.memory.read32(0x1FFA)); // PC (after TRAP)
+    const fv = try m68k.memory.read16(0x1FFE); // Format/Vector
+    const format = fv >> 12;
+    const vector = (fv & 0xFFF) / 4;
+    try std.testing.expectEqual(@as(u4, 0), format); // Format 0
+    try std.testing.expectEqual(@as(u8, 37), @as(u8, @truncate(vector))); // Vector 37 (TRAP #5)
+    
+    // Check PC jumped to exception handler
+    try std.testing.expectEqual(@as(u32, 0x5000), m68k.pc);
+    // Check supervisor mode
+    try std.testing.expect((m68k.sr & 0x2000) != 0);
+}
+
+
 
 
 

@@ -238,7 +238,28 @@ fn executeExt(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
 fn executeLea(m: *cpu.M68k, i: *const decoder.Instruction) !u32 { const r = switch (i.dst) { .AddrReg => |v| v, else => 0 }; m.a[r] = try calculateEA(m, i.src); m.pc += i.size; return 4; }
 fn executeRts(m: *cpu.M68k) !u32 { m.pc = try m.memory.read32(m.a[7]); m.a[7] += 4; return 16; }
 fn executeRtr(m: *cpu.M68k) !u32 { const ccr = try m.memory.read16(m.a[7]); m.sr = (m.sr & 0xFF00) | (ccr & 0xFF); m.pc = try m.memory.read32(m.a[7] + 2); m.a[7] += 6; return 20; }
-fn executeRte(m: *cpu.M68k) !u32 { const sp = m.a[7]; m.sr = try m.memory.read16(sp); m.pc = try m.memory.read32(sp + 2); m.a[7] = sp + 8; return 20; }
+fn executeRte(m: *cpu.M68k) !u32 { 
+    const sp = m.a[7]; 
+    m.sr = try m.memory.read16(sp); 
+    m.pc = try m.memory.read32(sp + 2); 
+    const format_vector = try m.memory.read16(sp + 6);
+    const format = @as(u4, @truncate(format_vector >> 12));
+    
+    // 68020 스택 프레임 처리
+    var frame_size: u32 = 8; // 기본: SR(2) + PC(4) + Format/Vector(2)
+    switch (format) {
+        0 => frame_size = 8,  // Short format (4-word)
+        1 => frame_size = 8,  // Throwaway (4-word)
+        2 => frame_size = 12, // Instruction exception (6-word)
+        9 => frame_size = 20, // Coprocessor mid-instruction (10-word)
+        0xA => frame_size = 24, // Short bus cycle fault (12-word)
+        0xB => frame_size = 84, // Long bus cycle fault (42-word)
+        else => {}, // Unknown format, use default
+    }
+    
+    m.a[7] = sp + frame_size; 
+    return 20; 
+}
 fn executeTrap(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const v = switch (i.src) { .Immediate8 => |w| w, else => 0 }; const vn: u8 = 32 + (v & 0xF); try pushExceptionFrame(m, m.pc + 2, vn, 0); m.pc = try m.memory.read32(m.getExceptionVector(vn)); m.sr |= 0x2000; return 34;
 }
