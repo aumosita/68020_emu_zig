@@ -77,6 +77,7 @@ pub const Mnemonic = enum {
     // 시스템 제어
     TRAP, TRAPV,
     CHK,
+    TAS,
     ILLEGAL,
     RESET, STOP,
     MOVEC,  // 68020: Move Control Register
@@ -373,9 +374,16 @@ pub const Decoder = struct {
             inst.data_size = if ((opmode & 1) == 0) .Word else .Long;
             inst.src = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, inst.data_size);
             inst.dst = .{ .AddrReg = @truncate(reg) };
-        } else if (opmode == 0x1) {
+        } else if (opmode == 0x1 or opmode == 0x3 or opmode == 0x5) {
+            // CMPM: opmode 001 (byte), 011 (word), 101 (long)
             inst.mnemonic = .CMPM;
-            inst.data_size = .Byte;
+            inst.data_size = switch (opmode) {
+                0x1 => .Byte,
+                0x3 => .Word,
+                0x5 => .Long,
+                else => .Byte,
+            };
+            // opcode를 그대로 사용하여 executor에서 레지스터 추출
         } else if ((opmode >> 2) == 1) {
             inst.mnemonic = .EOR;
             inst.data_size = switch (opmode & 0x3) {
@@ -414,7 +422,10 @@ pub const Decoder = struct {
             const ea_reg = opcode & 0x7;
             inst.src = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, .Word);
         } else if (opmode == 0x4 or opmode == 0x5 or opmode == 0x6) {
+            // EXG - Exchange registers
             inst.mnemonic = .EXG;
+            inst.data_size = .Long;
+            // opcode를 그대로 사용하여 executor에서 디코딩
         } else {
             inst.mnemonic = .AND;
             const size_bits = (opcode >> 6) & 0x3;
@@ -630,14 +641,24 @@ pub const Decoder = struct {
             const ea_reg = opcode & 0x7;
             inst.dst = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, inst.data_size);
         } else if ((opcode & 0xFF00) == 0x4A00) {
-            inst.mnemonic = .TST;
-            const size_bits = (opcode >> 6) & 0x3;
-            inst.data_size = switch (size_bits) {
-                0 => .Byte, 1 => .Word, 2 => .Long, else => .Long,
-            };
-            const ea_mode = (opcode >> 3) & 0x7;
-            const ea_reg = opcode & 0x7;
-            inst.dst = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, inst.data_size);
+            if ((opcode & 0xFFC0) == 0x4AC0) {
+                // TAS (Test and Set)
+                inst.mnemonic = .TAS;
+                inst.data_size = .Byte;
+                const ea_mode = (opcode >> 3) & 0x7;
+                const ea_reg = opcode & 0x7;
+                inst.dst = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, .Byte);
+            } else {
+                // TST
+                inst.mnemonic = .TST;
+                const size_bits = (opcode >> 6) & 0x3;
+                inst.data_size = switch (size_bits) {
+                    0 => .Byte, 1 => .Word, 2 => .Long, else => .Long,
+                };
+                const ea_mode = (opcode >> 3) & 0x7;
+                const ea_reg = opcode & 0x7;
+                inst.dst = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, inst.data_size);
+            }
         } else if ((opcode & 0xFB80) == 0x4880) {
             inst.mnemonic = .MOVEM;
             inst.data_size = if ((opcode & 0x40) != 0) .Long else .Word;
@@ -672,6 +693,14 @@ pub const Decoder = struct {
                 inst.data_size = .Word;
                 inst.is_extb = false;
             }
+        } else if ((opcode & 0xF1C0) == 0x4180) {
+            // CHK <ea>, Dn
+            inst.mnemonic = .CHK;
+            inst.data_size = .Word;
+            inst.dst = .{ .DataReg = @truncate((opcode >> 9) & 0x7) };
+            const ea_mode = (opcode >> 3) & 0x7;
+            const ea_reg = opcode & 0x7;
+            inst.src = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, .Word);
         } else {
             inst.mnemonic = .UNKNOWN;
         }

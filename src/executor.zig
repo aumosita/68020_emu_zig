@@ -91,6 +91,15 @@ pub const Executor = struct {
             .PEA => return try executePea(m68k, inst),
             .MOVEM => return try executeMovem(m68k, inst),
             
+            .EXG => return try executeExg(m68k, inst),
+            .CMPM => return try executeCmpm(m68k, inst),
+            .CHK => return try executeChk(m68k, inst),
+            .TAS => return try executeTas(m68k, inst),
+            .ABCD => return try executeAbcd(m68k, inst),
+            .SBCD => return try executeSbcd(m68k, inst),
+            .NBCD => return try executeNbcd(m68k, inst),
+            .MOVEP => return try executeMovep(m68k, inst),
+            
             .ILLEGAL => return error.IllegalInstruction,
             else => {
                 m68k.pc += 2;
@@ -1561,6 +1570,171 @@ fn executeMovemFromMem(m68k: *cpu.M68k, inst: *const decoder.Instruction, mask: 
     
     m68k.pc += 4; // opcode + extension word
     return 8 + count * (if (inst.data_size == .Word) @as(u32, 4) else 8);
+}
+
+// ============================================================================
+// Phase 2 Extended Instructions
+// ============================================================================
+
+fn executeExg(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // EXG: Exchange registers
+    // Format: 1100 Rx 1 OpMode Ry  
+    // OpMode in bits 7-3 (with bit 8 always 1)
+    const opcode = inst.opcode;
+    const rx = (opcode >> 9) & 0x7;
+    const ry = opcode & 0x7;
+    const opmode = (opcode >> 3) & 0x1F;
+    
+    switch (opmode) {
+        0x08 => {
+            // Data register to data register
+            const temp = m68k.d[rx];
+            m68k.d[rx] = m68k.d[ry];
+            m68k.d[ry] = temp;
+        },
+        0x09 => {
+            // Address register to address register
+            const temp = m68k.a[rx];
+            m68k.a[rx] = m68k.a[ry];
+            m68k.a[ry] = temp;
+        },
+        0x11 => {
+            // Data register to address register
+            const temp = m68k.d[rx];
+            m68k.d[rx] = m68k.a[ry];
+            m68k.a[ry] = temp;
+        },
+        else => return error.InvalidOpmode,
+    }
+    
+    m68k.pc += 2;
+    return 6;
+}
+
+fn executeCmpm(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // CMPM: Compare memory (Ay)+ with (Ax)+
+    // Format: 1011 Ax 1 Size 001 Ay
+    const opcode = inst.opcode;
+    const ax = (opcode >> 9) & 0x7;
+    const ay = opcode & 0x7;
+    const size = inst.data_size;
+    
+    const bytes: u32 = switch (size) {
+        .Byte => 1,
+        .Word => 2,
+        .Long => 4,
+    };
+    
+    // Read from (Ay)+
+    const src_val = switch (size) {
+        .Byte => @as(u32, try m68k.memory.read8(m68k.a[ay])),
+        .Word => @as(u32, try m68k.memory.read16(m68k.a[ay])),
+        .Long => try m68k.memory.read32(m68k.a[ay]),
+    };
+    m68k.a[ay] += bytes;
+    
+    // Read from (Ax)+
+    const dst_val = switch (size) {
+        .Byte => @as(u32, try m68k.memory.read8(m68k.a[ax])),
+        .Word => @as(u32, try m68k.memory.read16(m68k.a[ax])),
+        .Long => try m68k.memory.read32(m68k.a[ax]),
+    };
+    m68k.a[ax] += bytes;
+    
+    // Perform subtraction (dst - src) for flags (same as CMP)
+    const result = dst_val -% src_val;
+    setArithmeticFlags(m68k, dst_val, src_val, result, size, true);
+    
+    m68k.pc += 2;
+    return 12;
+}
+
+fn executeChk(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // CHK: Check register against bounds
+    const reg = switch (inst.dst) {
+        .DataReg => |r| r,
+        else => return error.InvalidOperand,
+    };
+    
+    const bound = try getOperandValue(m68k, inst.src, .Word);
+    const value = m68k.d[reg] & 0xFFFF;
+    
+    // Check if value is negative (bit 15 set) or > bound
+    if ((value & 0x8000) != 0 or value > bound) {
+        // CHK exception (vector 6)
+        const vector_addr = m68k.getExceptionVector(6);
+        
+        // Save SR and PC
+        const sp = m68k.a[7] - 6;
+        try m68k.memory.write32(sp + 2, m68k.pc + 2);
+        try m68k.memory.write16(sp, m68k.sr);
+        m68k.a[7] = sp;
+        
+        // Set N flag if value < 0, clear if value > bound
+        if ((value & 0x8000) != 0) {
+            m68k.sr |= 0x08; // N flag
+        } else {
+            m68k.sr &= ~@as(u16, 0x08);
+        }
+        
+        // Jump to exception handler
+        m68k.pc = try m68k.memory.read32(vector_addr);
+        m68k.sr |= 0x2000; // Supervisor mode
+        
+        return 40;
+    }
+    
+    m68k.pc += 2;
+    return 10;
+}
+
+fn executeTas(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // TAS: Test and Set
+    const addr = try calculateEA(m68k, inst.dst);
+    
+    // Read byte
+    const value = try m68k.memory.read8(addr);
+    
+    // Test (set flags)
+    m68k.setFlags(@as(u32, value), .Byte);
+    
+    // Set bit 7
+    try m68k.memory.write8(addr, value | 0x80);
+    
+    m68k.pc += 2;
+    return 14;
+}
+
+fn executeAbcd(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // ABCD: Add BCD with extend
+    // TODO: Implement BCD addition logic
+    _ = inst;
+    m68k.pc += 2;
+    return 6;
+}
+
+fn executeSbcd(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // SBCD: Subtract BCD with extend
+    // TODO: Implement BCD subtraction logic
+    _ = inst;
+    m68k.pc += 2;
+    return 6;
+}
+
+fn executeNbcd(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // NBCD: Negate BCD with extend
+    // TODO: Implement BCD negation logic
+    _ = inst;
+    m68k.pc += 2;
+    return 6;
+}
+
+fn executeMovep(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // MOVEP: Move Peripheral Data
+    // TODO: Implement MOVEP logic
+    _ = inst;
+    m68k.pc += 2;
+    return 16;
 }
 
 // ============================================================================
