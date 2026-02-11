@@ -57,6 +57,12 @@
 
 - 불법 인코딩/확장 워드 예외 커버리지 확장 ✅(완료)
 
+- 소프트웨어 TLB(주소 변환 캐시) 도입
+  - `address_translator` 경로에 소형 TLB(4~8 entries) fast-path 추가
+  - key: logical page + function_code + access space, value: physical page
+  - translator/hook 정책 변경 시 flush/invalidate API 제공
+  - 완료 기준: translator 콜백 호출 감소 회귀 테스트 + flush 일관성 테스트 + 벤치 비교 문서화
+
 ## 중간 우선순위
 
 - 사이클 모델 정리(기능 정확도 유지, 선택적 정밀화) ✅(완료)
@@ -100,6 +106,12 @@
   - ✅ 기존 경량 모델과 호환되는 옵션/마이그레이션 정책 유지
   - ✅ cache hit/miss/invalidate 회귀 + 용량/정렬 정책 문서화
 
+- 파이프라인 스톨 모델 정밀화(옵션 기반)
+  - `PipelineMode.approx`에서 분기 flush penalty와 일부 EA+write overlap 보정 추가
+  - `PipelineMode.detailed`는 상태머신 골격/계측 포인트만 우선 도입(실동작은 단계적 확장)
+  - 기능 정확도 경로(`off`)와 완전히 분리된 cycle 모델 유지
+  - 완료 기준: 모드별 cycle 회귀 테스트 + 정책 문서(`docs/cycle-model.md`) 업데이트
+
 ## 낮은 우선순위
 
 - PMMU-ready 확장 준비 ✅(완료)
@@ -128,6 +140,12 @@
   - 희소 인코딩(bitfield/packed decimal/exception return PC) 중심 우선 연동
   - 완료 기준: CI에서 외부 벡터 subset 자동 실행
 
+- FPU(MC68881) 인터페이스 구체화(장기)
+  - FPU 상태 레지스터/예외 플래그 최소 모델(FPSR/FPCR/FPIAR) 정의
+  - 코어와 분리된 플러그인 인터페이스(컨텍스트 단위)로 연산 백엔드 연결
+  - 1차는 subset 명령(FMOVE/FADD/FMUL) 우선, 이후 80-bit extended 정밀도 강화
+  - 완료 기준: 명령 subset 정확도 테스트 + 정밀도/예외 정책 문서화
+
 ## 후속 유지보수 모음
 
 - 예외 프레임 정확도 보강 시 stack/frame 상호영향 회귀 유지
@@ -137,3 +155,4 @@
 - bitfield 희소 인코딩 및 외부 validation vector와의 교차검증
 - 신규 명령/사이클 정책 변경 시 고정 cycle assertion 테스트 동반 갱신
 - 핸들러 반환 타입 확장 시 코프로세서 계약 문서/회귀 동시 갱신
+- 소프트웨어 TLB 도입 후 translator/hook 변경 시 flush/invalidate 누락 회귀 테스트 유지
