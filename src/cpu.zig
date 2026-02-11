@@ -768,8 +768,9 @@ test "M68k ABCD - Add BCD" {
     m68k.d[1] = 0x17;
     try m68k.memory.write16(0x1000, 0xC101);
     m68k.pc = 0x1000;
-    _ = try m68k.step();
+    const cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0x42), m68k.d[0] & 0xFF);
+    try std.testing.expectEqual(@as(u32, 6), cycles);
 }
 
 test "M68k MOVEP - Move Peripheral" {
@@ -781,9 +782,10 @@ test "M68k MOVEP - Move Peripheral" {
     try m68k.memory.write16(0x1000, 0x01C8);
     try m68k.memory.write16(0x1002, 0x0000);
     m68k.pc = 0x1000;
-    _ = try m68k.step();
+    const cycles = try m68k.step();
     try std.testing.expectEqual(@as(u8, 0x12), try m68k.memory.read8(0x2000));
     try std.testing.expectEqual(@as(u8, 0x34), try m68k.memory.read8(0x2002));
+    try std.testing.expectEqual(@as(u32, 16), cycles);
 }
 
 test "M68k CAS2 - Dual Compare and Swap" {
@@ -802,9 +804,10 @@ test "M68k CAS2 - Dual Compare and Swap" {
     try m68k.memory.write16(0x1002, 0x8200); // A0, Du2, Dc0
     try m68k.memory.write16(0x1004, 0x9301); // A1, Du3, Dc1
     m68k.pc = 0x1000;
-    _ = try m68k.step();
+    const cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 888), try m68k.memory.read32(0x2000));
     try std.testing.expectEqual(@as(u32, 999), try m68k.memory.read32(0x3000));
+    try std.testing.expectEqual(@as(u32, 20), cycles);
 }
 
 test "M68k CMPM - Compare Memory with Post-Increment" {
@@ -822,12 +825,13 @@ test "M68k CMPM - Compare Memory with Post-Increment" {
     // CMPM.L (A1)+,(A0)+ - opcode: 0xB189 (size=10, Ax=0, Ay=1)
     try m68k.memory.write16(0x100, 0xB189);
     m68k.pc = 0x100;
-    _ = try m68k.step();
+    const long_cycles = try m68k.step();
     
     // Check: Z flag should be set (equal), both pointers incremented by 4
     try std.testing.expect((m68k.sr & M68k.FLAG_Z) != 0);
     try std.testing.expectEqual(@as(u32, 0x1004), m68k.a[0]);
     try std.testing.expectEqual(@as(u32, 0x2004), m68k.a[1]);
+    try std.testing.expectEqual(@as(u32, 12), long_cycles);
     
     // Test CMPM.W with different values
     m68k.a[2] = 0x3000;
@@ -838,13 +842,14 @@ test "M68k CMPM - Compare Memory with Post-Increment" {
     // CMPM.W (A3)+,(A2)+ - opcode: 0xB54B (size=01, Ax=2, Ay=3)
     try m68k.memory.write16(0x102, 0xB54B);
     m68k.pc = 0x102;
-    _ = try m68k.step();
+    const word_cycles = try m68k.step();
     
     // Check: Z flag should be clear (not equal), N flag set (negative result)
     try std.testing.expect((m68k.sr & M68k.FLAG_Z) == 0);
     try std.testing.expect((m68k.sr & M68k.FLAG_N) != 0);
     try std.testing.expectEqual(@as(u32, 0x3002), m68k.a[2]);
     try std.testing.expectEqual(@as(u32, 0x4002), m68k.a[3]);
+    try std.testing.expectEqual(@as(u32, 12), word_cycles);
 }
 
 test "M68k ABCD - Add BCD with Extend" {
@@ -861,10 +866,11 @@ test "M68k ABCD - Add BCD with Extend" {
     // ABCD D1,D0 - opcode: 0xC101 (Dx=0, Dy=1, mode=register)
     try m68k.memory.write16(0x100, 0xC101);
     m68k.pc = 0x100;
-    _ = try m68k.step();
+    const cycles_1 = try m68k.step();
     
     try std.testing.expectEqual(@as(u8, 0x77), @as(u8, @truncate(m68k.d[0])));
     try std.testing.expect((m68k.sr & M68k.FLAG_C) == 0); // No carry
+    try std.testing.expectEqual(@as(u32, 6), cycles_1);
     
     // Test with carry: 0x99 + 0x01 = 0x00 with carry
     m68k.d[2] = 0x99;
@@ -874,11 +880,12 @@ test "M68k ABCD - Add BCD with Extend" {
     // ABCD D3,D2 - opcode: 0xC503
     try m68k.memory.write16(0x102, 0xC503);
     m68k.pc = 0x102;
-    _ = try m68k.step();
+    const cycles_2 = try m68k.step();
     
     try std.testing.expectEqual(@as(u8, 0x00), @as(u8, @truncate(m68k.d[2])));
     try std.testing.expect((m68k.sr & M68k.FLAG_C) != 0); // Carry set
     try std.testing.expect((m68k.sr & M68k.FLAG_X) != 0); // Extend set
+    try std.testing.expectEqual(@as(u32, 6), cycles_2);
 }
 
 test "M68k SBCD - Subtract BCD with Extend" {
@@ -895,10 +902,11 @@ test "M68k SBCD - Subtract BCD with Extend" {
     // SBCD D1,D0 - opcode: 0x8101
     try m68k.memory.write16(0x100, 0x8101);
     m68k.pc = 0x100;
-    _ = try m68k.step();
+    const cycles = try m68k.step();
     
     try std.testing.expectEqual(@as(u8, 0x29), @as(u8, @truncate(m68k.d[0])));
     try std.testing.expect((m68k.sr & M68k.FLAG_C) == 0); // No borrow
+    try std.testing.expectEqual(@as(u32, 6), cycles);
 }
 
 test "M68k NBCD - Negate BCD with Extend" {
@@ -914,10 +922,11 @@ test "M68k NBCD - Negate BCD with Extend" {
     // NBCD D0 - opcode: 0x4800
     try m68k.memory.write16(0x100, 0x4800);
     m68k.pc = 0x100;
-    _ = try m68k.step();
+    const cycles = try m68k.step();
     
     try std.testing.expectEqual(@as(u8, 0x52), @as(u8, @truncate(m68k.d[0])));
     try std.testing.expect((m68k.sr & M68k.FLAG_C) != 0); // Borrow set
+    try std.testing.expectEqual(@as(u32, 6), cycles);
 }
 
 test "M68k MOVEC - Control Register Access" {
@@ -2187,10 +2196,11 @@ test "M68k shift and rotate preserve carry/extend semantics" {
     // LSL.B #1,D0: 0x80 -> 0x00, carry/extend must become 1.
     m68k.d[0] = 0x80;
     m68k.pc = 0x500;
-    _ = try m68k.executor.execute(&m68k, &lsl);
+    const lsl_cycles = try m68k.executor.execute(&m68k, &lsl);
     try std.testing.expectEqual(@as(u8, 0x00), @as(u8, @truncate(m68k.d[0])));
     try std.testing.expect((m68k.sr & M68k.FLAG_C) != 0);
     try std.testing.expect((m68k.sr & M68k.FLAG_X) != 0);
+    try std.testing.expectEqual(@as(u32, 8), lsl_cycles);
 
     var roxl = decoder.Instruction.init();
     roxl.mnemonic = .ROXL;
@@ -2203,10 +2213,11 @@ test "M68k shift and rotate preserve carry/extend semantics" {
     m68k.setFlag(M68k.FLAG_X, true);
     m68k.d[0] = 0x80;
     m68k.pc = 0x510;
-    _ = try m68k.executor.execute(&m68k, &roxl);
+    const roxl_cycles = try m68k.executor.execute(&m68k, &roxl);
     try std.testing.expectEqual(@as(u8, 0x01), @as(u8, @truncate(m68k.d[0])));
     try std.testing.expect((m68k.sr & M68k.FLAG_C) != 0);
     try std.testing.expect((m68k.sr & M68k.FLAG_X) != 0);
+    try std.testing.expectEqual(@as(u32, 8), roxl_cycles);
 
     var roxr = decoder.Instruction.init();
     roxr.mnemonic = .ROXR;
@@ -2219,10 +2230,11 @@ test "M68k shift and rotate preserve carry/extend semantics" {
     m68k.setFlag(M68k.FLAG_X, true);
     m68k.d[0] = 0x01;
     m68k.pc = 0x520;
-    _ = try m68k.executor.execute(&m68k, &roxr);
+    const roxr_cycles = try m68k.executor.execute(&m68k, &roxr);
     try std.testing.expectEqual(@as(u8, 0x80), @as(u8, @truncate(m68k.d[0])));
     try std.testing.expect((m68k.sr & M68k.FLAG_C) != 0);
     try std.testing.expect((m68k.sr & M68k.FLAG_X) != 0);
+    try std.testing.expectEqual(@as(u32, 8), roxr_cycles);
 }
 
 test "M68k MOVEA decode and execution does not alter condition codes" {
@@ -2240,11 +2252,12 @@ test "M68k MOVEA decode and execution does not alter condition codes" {
     m68k.pc = 0x600;
     m68k.setSR(0x001F); // X,N,Z,V,C all set
 
-    _ = try m68k.executor.execute(&m68k, &movea);
+    const cycles = try m68k.executor.execute(&m68k, &movea);
 
     try std.testing.expectEqual(@as(u32, 0xFFFF8000), m68k.a[0]);
     try std.testing.expectEqual(@as(u32, 0x604), m68k.pc);
     try std.testing.expectEqual(@as(u16, 0x001F), m68k.sr & 0x001F);
+    try std.testing.expectEqual(@as(u32, 4), cycles);
 }
 
 test "M68k TRAPV traps only when V flag is set" {
@@ -2291,18 +2304,21 @@ test "M68k STOP halts until interrupt and resumes on IRQ" {
     m68k.a[7] = 0x4200;
     m68k.setSR(0x2000);
 
-    _ = try m68k.step();
+    const stop_enter_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0x804), m68k.pc);
     try std.testing.expect(m68k.stopped);
+    try std.testing.expectEqual(@as(u32, 4), stop_enter_cycles);
 
-    _ = try m68k.step(); // still stopped, no IRQ
+    const stop_wait_cycles = try m68k.step(); // still stopped, no IRQ
     try std.testing.expectEqual(@as(u32, 0x804), m68k.pc);
     try std.testing.expect(m68k.stopped);
+    try std.testing.expectEqual(@as(u32, 4), stop_wait_cycles);
 
     m68k.setInterruptLevel(2);
-    _ = try m68k.step(); // IRQ must wake STOP
+    const irq_entry_cycles = try m68k.step(); // IRQ must wake STOP
     try std.testing.expectEqual(@as(u32, 0x9000), m68k.pc);
     try std.testing.expect(!m68k.stopped);
+    try std.testing.expectEqual(@as(u32, 44), irq_entry_cycles);
 }
 
 test "M68k STOP and RESET privilege violation in user mode" {
@@ -2466,30 +2482,34 @@ test "M68k ORI/ANDI/EORI to CCR and SR semantics" {
     try m68k.memory.write16(0xE002, 0x0011); // set X and C
     m68k.pc = 0xE000;
     m68k.sr = 0x2000;
-    _ = try m68k.step();
+    const ori_ccr_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u16, 0x11), m68k.sr & 0x1F);
+    try std.testing.expectEqual(@as(u32, 20), ori_ccr_cycles);
 
     // ANDI to CCR
     try m68k.memory.write16(0xE010, 0x023C);
     try m68k.memory.write16(0xE012, 0x0001); // keep only C
     m68k.pc = 0xE010;
-    _ = try m68k.step();
+    const andi_ccr_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u16, 0x01), m68k.sr & 0x1F);
+    try std.testing.expectEqual(@as(u32, 20), andi_ccr_cycles);
 
     // EORI to CCR
     try m68k.memory.write16(0xE020, 0x0A3C);
     try m68k.memory.write16(0xE022, 0x0003); // toggle C,V
     m68k.pc = 0xE020;
-    _ = try m68k.step();
+    const eori_ccr_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u16, 0x02), m68k.sr & 0x1F);
+    try std.testing.expectEqual(@as(u32, 20), eori_ccr_cycles);
 
     // ORI to SR in supervisor mode
     try m68k.memory.write16(0xE030, 0x007C);
     try m68k.memory.write16(0xE032, 0x0700); // set IPL=7
     m68k.pc = 0xE030;
     m68k.sr = 0x2002;
-    _ = try m68k.step();
+    const ori_sr_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u16, 0x2702), m68k.sr);
+    try std.testing.expectEqual(@as(u32, 20), ori_sr_cycles);
 
     // ANDI to SR in user mode => privilege violation
     try m68k.memory.write16(0xE040, 0x027C);
@@ -2498,16 +2518,18 @@ test "M68k ORI/ANDI/EORI to CCR and SR semantics" {
     m68k.pc = 0xE040;
     m68k.a[7] = 0x4A00;
     m68k.sr = 0x0000;
-    _ = try m68k.step();
+    const andi_sr_user_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0xE100), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 34), andi_sr_user_cycles);
 
     // EORI to SR in supervisor mode
     try m68k.memory.write16(0xE050, 0x0A7C);
     try m68k.memory.write16(0xE052, 0x0007);
     m68k.pc = 0xE050;
     m68k.sr = 0x2000;
-    _ = try m68k.step();
+    const eori_sr_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u16, 0x2007), m68k.sr);
+    try std.testing.expectEqual(@as(u32, 20), eori_sr_cycles);
 }
 
 test "M68k CALLM and RTM execute module frame round-trip" {
