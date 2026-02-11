@@ -147,8 +147,14 @@ pub const Decoder = struct {
         
         return switch (high4) {
             0x1, 0x2, 0x3 => try self.decodeMove(opcode, pc, read_word),
+            0x5 => try self.decodeGroup5(opcode, pc, read_word),
             0x6 => try self.decodeBranch(opcode, pc, read_word),
             0x7 => self.decodeMoveq(opcode, pc),
+            0x8 => try self.decodeGroup8(opcode, pc, read_word),
+            0x9, 0xD => try self.decodeArithmetic(opcode, pc, read_word, @truncate(high4)),
+            0xB => try self.decodeGroupB(opcode, pc, read_word),
+            0xC => try self.decodeGroupC(opcode, pc, read_word),
+            0xE => try self.decodeShiftRotate(opcode, pc, read_word),
             else => try self.decodeLegacy(opcode, pc, read_word),
         };
     }
@@ -223,6 +229,263 @@ pub const Decoder = struct {
         const dst_mode = (opcode >> 6) & 0x7;
         const dst_reg = (opcode >> 9) & 0x7;
         inst.dst = try self.decodeEA(@truncate(dst_mode), @truncate(dst_reg), &current_pc, read_word, inst.data_size);
+        
+        inst.size = @truncate(current_pc - pc);
+        return inst;
+    }
+    
+    // ============================================================================
+    // Group 0x5: ADDQ, SUBQ, DBcc, Scc
+    // ============================================================================
+    fn decodeGroup5(self: *const Decoder, opcode: u16, pc: u32, read_word: *const fn(u32) u16) !Instruction {
+        var current_pc = pc + 2;
+        var inst = Instruction.init();
+        inst.opcode = opcode;
+        
+        const mode = (opcode >> 3) & 0x7;
+        const reg = opcode & 0x7;
+        const size_bits = (opcode >> 6) & 0x3;
+        
+        if ((opcode & 0x00F8) == 0x00C8) {
+            // DBcc
+            inst.mnemonic = .DBcc;
+            inst.dst = .{ .DataReg = @truncate(reg) };
+            const disp = @as(i16, @bitCast(read_word(current_pc)));
+            current_pc += 2;
+            inst.src = .{ .Immediate16 = @bitCast(disp) };
+        } else if (size_bits == 0x3) {
+            // Scc
+            inst.mnemonic = .Scc;
+            inst.dst = try self.decodeEA(@truncate(mode), @truncate(reg), &current_pc, read_word, .Byte);
+            inst.data_size = .Byte;
+        } else {
+            // ADDQ / SUBQ
+            const is_sub = ((opcode >> 8) & 1) == 1;
+            inst.mnemonic = if (is_sub) .SUBQ else .ADDQ;
+            inst.data_size = switch (size_bits) {
+                0 => .Byte, 1 => .Word, 2 => .Long, else => .Long,
+            };
+            var data: u8 = @truncate((opcode >> 9) & 0x7);
+            if (data == 0) data = 8;
+            inst.src = .{ .Immediate8 = data };
+            inst.dst = try self.decodeEA(@truncate(mode), @truncate(reg), &current_pc, read_word, inst.data_size);
+        }
+        
+        inst.size = @truncate(current_pc - pc);
+        return inst;
+    }
+    
+    // ============================================================================
+    // Group 0x8: OR, DIVU, DIVS, SBCD
+    // ============================================================================
+    fn decodeGroup8(self: *const Decoder, opcode: u16, pc: u32, read_word: *const fn(u32) u16) !Instruction {
+        var current_pc = pc + 2;
+        var inst = Instruction.init();
+        inst.opcode = opcode;
+        
+        const opmode = (opcode >> 6) & 0x7;
+        if ((opcode & 0x1F0) == 0x100) {
+            inst.mnemonic = .SBCD;
+        } else if (opmode == 0x3 or opmode == 0x7) {
+            inst.mnemonic = if (opmode == 0x3) .DIVU else .DIVS;
+            inst.dst = .{ .DataReg = @truncate((opcode >> 9) & 0x7) };
+            const ea_mode = (opcode >> 3) & 0x7;
+            const ea_reg = opcode & 0x7;
+            inst.src = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, .Word);
+        } else {
+            inst.mnemonic = .OR;
+            const size_bits = (opcode >> 6) & 0x3;
+            inst.data_size = switch (size_bits) {
+                0 => .Byte, 1 => .Word, 2 => .Long, else => .Long,
+            };
+            const direction = (opcode >> 8) & 1;
+            const reg = (opcode >> 9) & 0x7;
+            const ea_mode = (opcode >> 3) & 0x7;
+            const ea_reg = opcode & 0x7;
+            if (direction == 0) {
+                inst.src = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, inst.data_size);
+                inst.dst = .{ .DataReg = @truncate(reg) };
+            } else {
+                inst.src = .{ .DataReg = @truncate(reg) };
+                inst.dst = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, inst.data_size);
+            }
+        }
+        
+        inst.size = @truncate(current_pc - pc);
+        return inst;
+    }
+    
+    // ============================================================================
+    // Group 0x9/D: SUB, ADD, SUBA, ADDA
+    // ============================================================================
+    fn decodeArithmetic(self: *const Decoder, opcode: u16, pc: u32, read_word: *const fn(u32) u16, high4: u4) !Instruction {
+        var current_pc = pc + 2;
+        var inst = Instruction.init();
+        inst.opcode = opcode;
+        
+        const is_add = high4 == 0xD;
+        const opmode = (opcode >> 6) & 0x7;
+        const reg = (opcode >> 9) & 0x7;
+        const ea_mode = (opcode >> 3) & 0x7;
+        const ea_reg = opcode & 0x7;
+        
+        if ((opmode & 0x4) != 0) {
+            inst.mnemonic = if (is_add) .ADDA else .SUBA;
+            inst.data_size = if ((opmode & 1) == 0) .Word else .Long;
+            inst.src = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, inst.data_size);
+            inst.dst = .{ .AddrReg = @truncate(reg) };
+        } else {
+            inst.mnemonic = if (is_add) .ADD else .SUB;
+            inst.data_size = switch (opmode & 0x3) {
+                0 => .Byte, 1 => .Word, 2 => .Long, else => .Long,
+            };
+            const direction = (opmode >> 2) & 1;
+            if (direction == 0) {
+                inst.src = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, inst.data_size);
+                inst.dst = .{ .DataReg = @truncate(reg) };
+            } else {
+                inst.src = .{ .DataReg = @truncate(reg) };
+                inst.dst = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, inst.data_size);
+            }
+        }
+        
+        inst.size = @truncate(current_pc - pc);
+        return inst;
+    }
+    
+    // ============================================================================
+    // Group 0xB: CMP, EOR, CMPM
+    // ============================================================================
+    fn decodeGroupB(self: *const Decoder, opcode: u16, pc: u32, read_word: *const fn(u32) u16) !Instruction {
+        var current_pc = pc + 2;
+        var inst = Instruction.init();
+        inst.opcode = opcode;
+        
+        const opmode = (opcode >> 6) & 0x7;
+        const reg = (opcode >> 9) & 0x7;
+        const ea_mode = (opcode >> 3) & 0x7;
+        const ea_reg = opcode & 0x7;
+        
+        if ((opmode & 0x4) != 0) {
+            inst.mnemonic = .CMPA;
+            inst.data_size = if ((opmode & 1) == 0) .Word else .Long;
+            inst.src = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, inst.data_size);
+            inst.dst = .{ .AddrReg = @truncate(reg) };
+        } else if (opmode == 0x1) {
+            inst.mnemonic = .CMPM;
+            inst.data_size = .Byte;
+        } else if ((opmode >> 2) == 1) {
+            inst.mnemonic = .EOR;
+            inst.data_size = switch (opmode & 0x3) {
+                0 => .Byte, 1 => .Word, 2 => .Long, else => .Long,
+            };
+            inst.src = .{ .DataReg = @truncate(reg) };
+            inst.dst = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, inst.data_size);
+        } else {
+            inst.mnemonic = .CMP;
+            inst.data_size = switch (opmode) {
+                0 => .Byte, 1 => .Word, 2 => .Long, else => .Long,
+            };
+            inst.src = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, inst.data_size);
+            inst.dst = .{ .DataReg = @truncate(reg) };
+        }
+        
+        inst.size = @truncate(current_pc - pc);
+        return inst;
+    }
+    
+    // ============================================================================
+    // Group 0xC: AND, MULU, MULS, ABCD, EXG
+    // ============================================================================
+    fn decodeGroupC(self: *const Decoder, opcode: u16, pc: u32, read_word: *const fn(u32) u16) !Instruction {
+        var current_pc = pc + 2;
+        var inst = Instruction.init();
+        inst.opcode = opcode;
+        
+        const opmode = (opcode >> 6) & 0x7;
+        if ((opcode & 0x1F0) == 0x100) {
+            inst.mnemonic = .ABCD;
+        } else if (opmode == 0x3 or opmode == 0x7) {
+            inst.mnemonic = if (opmode == 0x3) .MULU else .MULS;
+            inst.dst = .{ .DataReg = @truncate((opcode >> 9) & 0x7) };
+            const ea_mode = (opcode >> 3) & 0x7;
+            const ea_reg = opcode & 0x7;
+            inst.src = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, .Word);
+        } else if (opmode == 0x4 or opmode == 0x5 or opmode == 0x6) {
+            inst.mnemonic = .EXG;
+        } else {
+            inst.mnemonic = .AND;
+            const size_bits = (opcode >> 6) & 0x3;
+            inst.data_size = switch (size_bits) {
+                0 => .Byte, 1 => .Word, 2 => .Long, else => .Long,
+            };
+            const direction = (opcode >> 8) & 1;
+            const reg = (opcode >> 9) & 0x7;
+            const ea_mode = (opcode >> 3) & 0x7;
+            const ea_reg = opcode & 0x7;
+            if (direction == 0) {
+                inst.src = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, inst.data_size);
+                inst.dst = .{ .DataReg = @truncate(reg) };
+            } else {
+                inst.src = .{ .DataReg = @truncate(reg) };
+                inst.dst = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, inst.data_size);
+            }
+        }
+        
+        inst.size = @truncate(current_pc - pc);
+        return inst;
+    }
+    
+    // ============================================================================
+    // Group 0xE: Shift/Rotate (ASR, ASL, LSR, LSL, ROR, ROL, ROXR, ROXL)
+    // ============================================================================
+    fn decodeShiftRotate(self: *const Decoder, opcode: u16, pc: u32, read_word: *const fn(u32) u16) !Instruction {
+        var current_pc = pc + 2;
+        var inst = Instruction.init();
+        inst.opcode = opcode;
+        
+        const size_bits = (opcode >> 6) & 0x3;
+        if (size_bits == 0x3) {
+            // Memory shift
+            const shift_type = (opcode >> 9) & 0x3;
+            const direction = (opcode >> 8) & 1;
+            inst.mnemonic = switch (shift_type) {
+                0 => if (direction == 0) .ASR else .ASL,
+                1 => if (direction == 0) .LSR else .LSL,
+                2 => if (direction == 0) .ROXR else .ROXL,
+                3 => if (direction == 0) .ROR else .ROL,
+                else => .UNKNOWN,
+            };
+            const ea_mode = (opcode >> 3) & 0x7;
+            const ea_reg = opcode & 0x7;
+            inst.dst = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, .Word);
+            inst.data_size = .Word;
+        } else {
+            // Register shift
+            const shift_type = (opcode >> 3) & 0x3;
+            const direction = (opcode >> 8) & 1;
+            inst.mnemonic = switch (shift_type) {
+                0 => if (direction == 0) .ASR else .ASL,
+                1 => if (direction == 0) .LSR else .LSL,
+                2 => if (direction == 0) .ROXR else .ROXL,
+                3 => if (direction == 0) .ROR else .ROL,
+                else => .UNKNOWN,
+            };
+            inst.data_size = switch (size_bits) {
+                0 => .Byte, 1 => .Word, 2 => .Long, else => .Long,
+            };
+            const ir = (opcode >> 5) & 1;
+            const count_reg = (opcode >> 9) & 0x7;
+            const data_reg = opcode & 0x7;
+            if (ir == 0) {
+                var count: u8 = @truncate(count_reg);
+                if (count == 0) count = 8;
+                inst.src = .{ .Immediate8 = count };
+            } else {
+                inst.src = .{ .DataReg = @truncate(count_reg) };
+            }
+            inst.dst = .{ .DataReg = @truncate(data_reg) };
+        }
         
         inst.size = @truncate(current_pc - pc);
         return inst;
@@ -407,199 +670,8 @@ pub const Decoder = struct {
                 }
             },
             
-            0x5 => {
-                const mode = (opcode >> 3) & 0x7;
-                const reg = opcode & 0x7;
-                const size_bits = (opcode >> 6) & 0x3;
-                if ((opcode & 0x00F8) == 0x00C8) {
-                    inst.mnemonic = .DBcc;
-                    inst.dst = .{ .DataReg = @truncate(reg) };
-                    const disp = @as(i16, @bitCast(read_word(current_pc)));
-                    current_pc += 2;
-                    inst.src = .{ .Immediate16 = @bitCast(disp) };
-                } else if (size_bits == 0x3) {
-                    inst.mnemonic = .Scc;
-                    inst.dst = try self.decodeEA(@truncate(mode), @truncate(reg), &current_pc, read_word, .Byte);
-                    inst.data_size = .Byte;
-                } else {
-                    const is_sub = ((opcode >> 8) & 1) == 1;
-                    inst.mnemonic = if (is_sub) .SUBQ else .ADDQ;
-                    inst.data_size = switch (size_bits) {
-                        0 => .Byte, 1 => .Word, 2 => .Long, else => .Long,
-                    };
-                    var data: u8 = @truncate((opcode >> 9) & 0x7);
-                    if (data == 0) data = 8;
-                    inst.src = .{ .Immediate8 = data };
-                    inst.dst = try self.decodeEA(@truncate(mode), @truncate(reg), &current_pc, read_word, inst.data_size);
-                }
-            },
-            
-            0x8 => {
-                const opmode = (opcode >> 6) & 0x7;
-                if ((opcode & 0x1F0) == 0x100) {
-                    inst.mnemonic = .SBCD;
-                } else if (opmode == 0x3 or opmode == 0x7) {
-                    inst.mnemonic = if (opmode == 0x3) .DIVU else .DIVS;
-                    inst.dst = .{ .DataReg = @truncate((opcode >> 9) & 0x7) };
-                    const ea_mode = (opcode >> 3) & 0x7;
-                    const ea_reg = opcode & 0x7;
-                    inst.src = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, .Word);
-                } else {
-                    inst.mnemonic = .OR;
-                    const size_bits = (opcode >> 6) & 0x3;
-                    inst.data_size = switch (size_bits) {
-                        0 => .Byte, 1 => .Word, 2 => .Long, else => .Long,
-                    };
-                    const direction = (opcode >> 8) & 1;
-                    const reg = (opcode >> 9) & 0x7;
-                    const ea_mode = (opcode >> 3) & 0x7;
-                    const ea_reg = opcode & 0x7;
-                    if (direction == 0) {
-                        inst.src = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, inst.data_size);
-                        inst.dst = .{ .DataReg = @truncate(reg) };
-                    } else {
-                        inst.src = .{ .DataReg = @truncate(reg) };
-                        inst.dst = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, inst.data_size);
-                    }
-                }
-            },
-            
-            0x9, 0xD => {
-                const is_add = high4 == 0xD;
-                const opmode = (opcode >> 6) & 0x7;
-                const reg = (opcode >> 9) & 0x7;
-                const ea_mode = (opcode >> 3) & 0x7;
-                const ea_reg = opcode & 0x7;
-                if ((opmode & 0x4) != 0) {
-                    inst.mnemonic = if (is_add) .ADDA else .SUBA;
-                    inst.data_size = if ((opmode & 1) == 0) .Word else .Long;
-                    inst.src = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, inst.data_size);
-                    inst.dst = .{ .AddrReg = @truncate(reg) };
-                } else {
-                    inst.mnemonic = if (is_add) .ADD else .SUB;
-                    inst.data_size = switch (opmode & 0x3) {
-                        0 => .Byte, 1 => .Word, 2 => .Long, else => .Long,
-                    };
-                    const direction = (opmode >> 2) & 1;
-                    if (direction == 0) {
-                        inst.src = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, inst.data_size);
-                        inst.dst = .{ .DataReg = @truncate(reg) };
-                    } else {
-                        inst.src = .{ .DataReg = @truncate(reg) };
-                        inst.dst = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, inst.data_size);
-                    }
-                }
-            },
-            
-            0xB => {
-                const opmode = (opcode >> 6) & 0x7;
-                const reg = (opcode >> 9) & 0x7;
-                const ea_mode = (opcode >> 3) & 0x7;
-                const ea_reg = opcode & 0x7;
-                if ((opmode & 0x4) != 0) {
-                    inst.mnemonic = .CMPA;
-                    inst.data_size = if ((opmode & 1) == 0) .Word else .Long;
-                    inst.src = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, inst.data_size);
-                    inst.dst = .{ .AddrReg = @truncate(reg) };
-                } else if (opmode >= 0x4) {
-                    inst.mnemonic = .EOR;
-                    inst.data_size = switch (opmode & 0x3) {
-                        0 => .Byte, 1 => .Word, 2 => .Long, else => .Long,
-                    };
-                    inst.src = .{ .DataReg = @truncate(reg) };
-                    inst.dst = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, inst.data_size);
-                } else {
-                    inst.mnemonic = .CMP;
-                    inst.data_size = switch (opmode & 0x3) {
-                        0 => .Byte, 1 => .Word, 2 => .Long, else => .Long,
-                    };
-                    inst.src = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, inst.data_size);
-                    inst.dst = .{ .DataReg = @truncate(reg) };
-                }
-            },
-            
-            0xC => {
-                const opmode = (opcode >> 6) & 0x7;
-                const reg = (opcode >> 9) & 0x7;
-                const ea_mode = (opcode >> 3) & 0x7;
-                const ea_reg = opcode & 0x7;
-                if ((opcode & 0x1F0) == 0x100) { inst.mnemonic = .ABCD; }
-                else if (opmode == 0x3 or opmode == 0x7) {
-                    inst.mnemonic = if (opmode == 0x3) .MULU else .MULS;
-                    inst.dst = .{ .DataReg = @truncate(reg) };
-                    inst.src = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, .Word);
-                } else if ((opcode & 0x1F0) == 0x140 or (opcode & 0x1F0) == 0x148 or (opcode & 0x1F0) == 0x188) { inst.mnemonic = .EXG; }
-                else {
-                    inst.mnemonic = .AND;
-                    inst.data_size = switch (opmode & 0x3) {
-                        0 => .Byte, 1 => .Word, 2 => .Long, else => .Long,
-                    };
-                    const direction = (opmode >> 2) & 1;
-                    if (direction == 0) {
-                        inst.src = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, inst.data_size);
-                        inst.dst = .{ .DataReg = @truncate(reg) };
-                    } else {
-                        inst.src = .{ .DataReg = @truncate(reg) };
-                        inst.dst = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, inst.data_size);
-                    }
-                }
-            },
-            
-            0xE => {
-                if ((opcode & 0xFFC0) == 0xEC00 or (opcode & 0xFFC0) == 0xE800 or (opcode & 0xFFC0) == 0xE400 or (opcode & 0xFFC0) == 0xE000) {
-                    const subop = (opcode >> 8) & 0x7;
-                    inst.mnemonic = switch (subop) {
-                        0 => .BFTST, 1 => .BFEXTU, 2 => .BFCHG, 3 => .BFEXTS,
-                        4 => .BFCLR, 5 => .BFFFO, 6 => .BFSET, 7 => .BFINS,
-                        else => .UNKNOWN,
-                    };
-                    const ea_mode = (opcode >> 3) & 0x7;
-                    const ea_reg = opcode & 0x7;
-                    const ext = read_word(current_pc);
-                    current_pc += 2;
-                    _ = ext;
-                    inst.dst = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, .Long);
-                } else {
-                    const ir = (opcode >> 5) & 1;
-                    const size_bits = (opcode >> 6) & 0x3;
-                    if (size_bits == 0x3) {
-                        const direction = (opcode >> 8) & 1;
-                        const shift_type = (opcode >> 9) & 0x3;
-                        inst.mnemonic = switch (shift_type) {
-                            0 => if (direction == 1) .ASL else .ASR,
-                            1 => if (direction == 1) .LSL else .LSR,
-                            2 => if (direction == 1) .ROXL else .ROXR,
-                            3 => if (direction == 1) .ROL else .ROR,
-                            else => .UNKNOWN,
-                        };
-                        inst.data_size = .Word;
-                        const ea_mode = (opcode >> 3) & 0x7;
-                        const ea_reg = opcode & 0x7;
-                        inst.dst = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, .Word);
-                        inst.src = .{ .Immediate8 = 1 };
-                    } else {
-                        const direction = (opcode >> 8) & 1;
-                        const shift_type = (opcode >> 3) & 0x3;
-                        inst.mnemonic = switch (shift_type) {
-                            0 => if (direction == 1) .ASL else .ASR,
-                            1 => if (direction == 1) .LSL else .LSR,
-                            2 => if (direction == 1) .ROXL else .ROXR,
-                            3 => if (direction == 1) .ROL else .ROR,
-                            else => .UNKNOWN,
-                        };
-                        inst.data_size = switch (size_bits) {
-                            0 => .Byte, 1 => .Word, 2 => .Long, else => .Long,
-                        };
-                        inst.dst = .{ .DataReg = @truncate(opcode & 0x7) };
-                        if (ir == 0) {
-                            var count: u8 = @truncate((opcode >> 9) & 0x7);
-                            if (count == 0) count = 8;
-                            inst.src = .{ .Immediate8 = count };
-                        } else {
-                            inst.src = .{ .DataReg = @truncate((opcode >> 9) & 0x7) };
-                        }
-                    }
-                }
+            0xF => {
+                inst.mnemonic = .UNKNOWN;
             },
             else => inst.mnemonic = .UNKNOWN,
         }
