@@ -136,10 +136,10 @@
   - ✅ CPI/MIPS는 참고 지표, 기능 회귀 우선 게이트 정책 명시
   - ✅ 재현 가능한 벤치 실행 절차/기준 수치 문서화(`docs/benchmark-guide.md`)
 
-- 외부 검증 스위트 연동
-  - 외부 68k validation vectors(JSON/바이너리)를 로드하는 테스트 러너 추가
-  - 희소 인코딩(bitfield/packed decimal/exception return PC) 중심 우선 연동
-  - 완료 기준: CI에서 외부 벡터 subset 자동 실행
+- 외부 검증 스위트 연동 ✅(완료)
+  - ✅ 외부 68k validation vectors(JSON) 로드 테스트 러너 추가(`src/external_vectors.zig`)
+  - ✅ 희소 인코딩(bitfield/packed decimal/exception return PC) subset 벡터 우선 연동(`external_vectors/subset`)
+  - ✅ `zig build test` 경로와 CI(`.github/workflows/ci.yml`)에서 subset 자동 실행
 
 - FPU(MC68881) 인터페이스 구체화(장기)
   - FPU 상태 레지스터/예외 플래그 최소 모델(FPSR/FPCR/FPIAR) 정의

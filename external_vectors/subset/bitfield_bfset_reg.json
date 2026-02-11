@@ -1,0 +1,21 @@
+{
+  "name": "bitfield_bfset_reg",
+  "setup": {
+    "pc": 256,
+    "sr": 8192,
+    "steps": 1,
+    "d": [0, 0, 0, 0, 0, 0, 0, 0],
+    "a": [0, 0, 0, 0, 0, 0, 0, 0],
+    "memory16": [
+      { "addr": 256, "value": 61120 },
+      { "addr": 258, "value": 16 }
+    ]
+  },
+  "expect": {
+    "pc": 260,
+    "step_cycles": 10,
+    "d": [
+      { "idx": 0, "value": 65535 }
+    ]
+  }
+}

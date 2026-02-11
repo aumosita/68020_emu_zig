@@ -32,6 +32,7 @@ Zig로 작성된 Motorola 68000/68020 CPU 에뮬레이터 코어입니다. 디�
 
 세부 정책/고정 경로 목록은 `docs/cycle-model.md`를 참고하세요.
 성능 측정 절차/기준 워크로드는 `docs/benchmark-guide.md`를 참고하세요.
+외부 검증 벡터(JSON) 러너/CI 연동은 `docs/external-vector-runner.md`를 참고하세요.
 
 ## 빌드 및 테스트
 

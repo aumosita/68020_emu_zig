@@ -45,3 +45,6 @@
 
 - `benchmark-guide.md`
   3개 대표 워크로드 기반 성능 측정 절차와 기준 수치
+
+- `external-vector-runner.md`
+  JSON 기반 외부 검증 벡터 로더/subset/CI 연동 가이드

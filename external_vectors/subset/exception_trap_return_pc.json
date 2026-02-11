@@ -1,0 +1,26 @@
+{
+  "name": "exception_trap_return_pc",
+  "setup": {
+    "pc": 4096,
+    "sr": 0,
+    "steps": 1,
+    "d": [0, 0, 0, 0, 0, 0, 0, 0],
+    "a": [0, 0, 0, 0, 0, 0, 0, 12288],
+    "memory16": [
+      { "addr": 4096, "value": 20032 }
+    ],
+    "memory32": [
+      { "addr": 128, "value": 20480 }
+    ]
+  },
+  "expect": {
+    "pc": 20480,
+    "step_cycles": 34,
+    "a": [
+      { "idx": 7, "value": 12280 }
+    ],
+    "memory32": [
+      { "addr": 12282, "value": 4098 }
+    ]
+  }
+}
