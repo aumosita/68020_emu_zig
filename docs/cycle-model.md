@@ -16,7 +16,10 @@
 
 - IRQ 진입: `44`
 - STOP 상태 대기 tick: `4`
-- fetch bus fault(frame A): `50`
+- fault(frame A) subtype:
+  - instruction fetch fault: `50`
+  - decode extension fetch fault: `52`
+  - execute data access fault: `54`
 - illegal/decode fault: `34`
 - I-cache miss fetch penalty: `+2` (fetch 단계)
 
@@ -50,4 +53,3 @@
 - 문서/커밋/릴리스 노트에서 사이클 관련 변경 시 반드시 아래로 표기:
   - `고정/검증됨`: 테스트 기대값과 함께 변경
   - `근사`: 정책 변경(의도)만 명시, 실칩 일치 주장 금지
-

@@ -114,6 +114,21 @@ pub const M68k = struct {
         return self.memory.read16(addr) catch 0;
     }
     
+    const FaultCycleSubtype = enum {
+        instruction_fetch,
+        decode_extension_fetch,
+        execute_data_access,
+    };
+
+    fn faultCycles(subtype: FaultCycleSubtype) u32 {
+        // Approximation policy: bus/address fault cost varies by where fault is detected.
+        return switch (subtype) {
+            .instruction_fetch => 50,
+            .decode_extension_fetch => 52,
+            .execute_data_access => 54,
+        };
+    }
+
     pub fn step(self: *M68k) !u32 {
         if (try self.handlePendingInterrupt()) {
             self.cycles += 44;
@@ -139,8 +154,9 @@ pub const M68k = struct {
                     .space = .Program,
                     .is_write = false,
                 });
-                self.cycles += 50;
-                return 50;
+                const cycles = faultCycles(.instruction_fetch);
+                self.cycles += cycles;
+                return cycles;
             },
             error.AddressError => {
                 try self.enterAddressErrorFrameA(self.pc, self.pc, .{
@@ -148,8 +164,9 @@ pub const M68k = struct {
                     .space = .Program,
                     .is_write = false,
                 });
-                self.cycles += 50;
-                return 50;
+                const cycles = faultCycles(.instruction_fetch);
+                self.cycles += cycles;
+                return cycles;
             },
             else => return err,
         };
@@ -180,8 +197,9 @@ pub const M68k = struct {
                     .is_write = false,
                 });
             }
-            self.cycles += 50 + fetch.penalty_cycles;
-            return 50 + fetch.penalty_cycles;
+            const cycles = faultCycles(.decode_extension_fetch) + fetch.penalty_cycles;
+            self.cycles += cycles;
+            return cycles;
         }
         self.last_data_access_addr = self.pc;
         self.last_data_access_is_write = false;
@@ -192,8 +210,9 @@ pub const M68k = struct {
                     .space = .Data,
                     .is_write = self.last_data_access_is_write,
                 });
-                self.cycles += 50 + fetch.penalty_cycles;
-                return 50 + fetch.penalty_cycles;
+                const cycles = faultCycles(.execute_data_access) + fetch.penalty_cycles;
+                self.cycles += cycles;
+                return cycles;
             },
             error.AddressError => {
                 try self.enterAddressErrorFrameA(self.pc, self.last_data_access_addr, .{
@@ -201,8 +220,9 @@ pub const M68k = struct {
                     .space = .Data,
                     .is_write = self.last_data_access_is_write,
                 });
-                self.cycles += 50 + fetch.penalty_cycles;
-                return 50 + fetch.penalty_cycles;
+                const cycles = faultCycles(.execute_data_access) + fetch.penalty_cycles;
+                self.cycles += cycles;
+                return cycles;
             },
             error.InvalidOperand, error.InvalidExtensionWord, error.InvalidControlRegister, error.Err => {
                 try self.enterException(4, self.pc, 0, null);
@@ -729,9 +749,10 @@ test "M68k decode extension fetch bus error preserves faulting address in format
     m68k.a[7] = 0x0700;
     m68k.setSR(0x2000);
 
-    _ = try m68k.step();
+    const cycles = try m68k.step();
 
     try std.testing.expectEqual(@as(u32, 0x0F00), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 52), cycles);
     try std.testing.expectEqual(@as(u32, 0x06E8), m68k.a[7]); // format A frame size
     try std.testing.expectEqual(@as(u16, 0xA008), try m68k.memory.read16(0x06EE)); // vector 2
     try std.testing.expectEqual(@as(u32, 0x1000), try m68k.memory.read32(0x06F0)); // precise decode fault address
@@ -1845,12 +1866,35 @@ test "M68k misaligned data word access raises address error vector 3" {
     const cycles = try m68k.step();
 
     try std.testing.expectEqual(@as(u32, 0x5C20), m68k.pc);
-    try std.testing.expectEqual(@as(u32, 50), cycles);
+    try std.testing.expectEqual(@as(u32, 54), cycles);
     try std.testing.expectEqual(@as(u32, 0x3AA8), m68k.a[7]); // format A (24-byte)
     try std.testing.expectEqual(@as(u16, 0xA00C), try m68k.memory.read16(0x3AAE)); // vector 3
     try std.testing.expectEqual(@as(u32, 0x1820), try m68k.memory.read32(0x3AAA)); // return PC
     try std.testing.expectEqual(@as(u32, 0x2001), try m68k.memory.read32(0x3AB0)); // precise misaligned data address
     try std.testing.expectEqual(@as(u16, 0x0800), try m68k.memory.read16(0x3AB4)); // FC from DFC(default 0), data write
+}
+
+test "M68k out-of-range data word write raises bus error vector 2 with execute-data cycles" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.initWithConfig(allocator, .{ .size = 0x1000 });
+    defer m68k.deinit();
+
+    try m68k.memory.write32(m68k.getExceptionVector(2), 0x0800);
+    try m68k.memory.write16(0x0180, 0x3080); // MOVE.W D0,(A0)
+    m68k.d[0] = 0x1234;
+    m68k.a[0] = 0x1000; // out of range for 16-bit write in 0x0000..0x0FFF
+    m68k.pc = 0x0180;
+    m68k.a[7] = 0x0F00;
+    m68k.setSR(0x2000);
+
+    const cycles = try m68k.step();
+
+    try std.testing.expectEqual(@as(u32, 0x0800), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 54), cycles);
+    try std.testing.expectEqual(@as(u32, 0x0EE8), m68k.a[7]); // format A (24-byte)
+    try std.testing.expectEqual(@as(u16, 0xA008), try m68k.memory.read16(0x0EEE)); // vector 2
+    try std.testing.expectEqual(@as(u32, 0x1000), try m68k.memory.read32(0x0EF0)); // fault address
+    try std.testing.expectEqual(@as(u16, 0x0800), try m68k.memory.read16(0x0EF4)); // FC from DFC(default 0), data write
 }
 
 test "M68k ILLEGAL opcode 0x4AFC enters illegal instruction exception" {
