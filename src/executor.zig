@@ -78,6 +78,8 @@ pub const Executor = struct {
             
             .BTST => return try executeBtst(m68k, inst),
             .BSET => return try executeBset(m68k, inst),
+            
+            .MOVEC => return try executeMovec(m68k, inst),  // 68020
             .BCLR => return try executeBclr(m68k, inst),
             .BCHG => return try executeBchg(m68k, inst),
             
@@ -750,11 +752,17 @@ fn executeExt(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
         else => return error.InvalidOperand,
     };
     
-    if (inst.data_size == .Word) {
+    if (inst.is_extb) {
+        // EXTB.L (68020): byte -> long
+        const byte_val: i8 = @bitCast(@as(u8, @truncate(m68k.d[reg])));
+        m68k.d[reg] = @bitCast(@as(i32, byte_val));
+    } else if (inst.data_size == .Word) {
+        // EXT.W: byte -> word
         const byte_val: i8 = @bitCast(@as(u8, @truncate(m68k.d[reg])));
         const extended: i16 = byte_val;
         m68k.d[reg] = (m68k.d[reg] & 0xFFFF0000) | @as(u32, @bitCast(@as(i32, extended) & 0xFFFF));
     } else {
+        // EXT.L: word -> long
         const word_val: i16 = @bitCast(@as(u16, @truncate(m68k.d[reg])));
         m68k.d[reg] = @bitCast(@as(i32, word_val));
     }
@@ -1554,15 +1562,8 @@ fn getOperandValue(m68k: *cpu.M68k, operand: decoder.Operand, size: decoder.Data
                 .Long => try m68k.memory.read32(addr),
             };
         },
-        .AddrDisplace => |info| {
-            const addr = m68k.a[info.reg] +% @as(u32, @bitCast(@as(i32, info.displacement)));
-            return switch (size) {
-                .Byte => @as(u32, try m68k.memory.read8(addr)),
-                .Word => @as(u32, try m68k.memory.read16(addr)),
-                .Long => try m68k.memory.read32(addr),
-            };
-        },
-        .Address => |addr| {
+        .Address, .ComplexEA => {
+            const addr = try calculateEA(m68k, operand);
             return switch (size) {
                 .Byte => @as(u32, try m68k.memory.read8(addr)),
                 .Word => @as(u32, try m68k.memory.read16(addr)),
@@ -1617,15 +1618,8 @@ fn setOperandValue(m68k: *cpu.M68k, operand: decoder.Operand, value: u32, size: 
                 .Long => try m68k.memory.write32(addr, value),
             }
         },
-        .AddrDisplace => |info| {
-            const addr = m68k.a[info.reg] +% @as(u32, @bitCast(@as(i32, info.displacement)));
-            switch (size) {
-                .Byte => try m68k.memory.write8(addr, @truncate(value)),
-                .Word => try m68k.memory.write16(addr, @truncate(value)),
-                .Long => try m68k.memory.write32(addr, value),
-            }
-        },
-        .Address => |addr| {
+        .Address, .ComplexEA => {
+            const addr = try calculateEA(m68k, operand);
             switch (size) {
                 .Byte => try m68k.memory.write8(addr, @truncate(value)),
                 .Word => try m68k.memory.write16(addr, @truncate(value)),
@@ -1639,24 +1633,58 @@ fn setOperandValue(m68k: *cpu.M68k, operand: decoder.Operand, value: u32, size: 
 fn calculateEA(m68k: *cpu.M68k, operand: decoder.Operand) !u32 {
     return switch (operand) {
         .AddrIndirect => |reg| m68k.a[reg],
-        .AddrDisplace => |info| blk: {
-            var disp = info.displacement;
-            if (disp == 0) {
-                // 디코더가 읽지 않은 경우 메모리에서 읽음 (opcode + 2)
-                disp = @bitCast(try m68k.memory.read16(m68k.pc + 2));
+        .Address => |addr| addr,
+        .ComplexEA => |info| {
+            var addr: u32 = 0;
+            
+            // 1. Base register (An or PC)
+            if (info.base_reg) |reg| {
+                addr = m68k.a[reg];
+            } else if (info.is_pc_relative) {
+                // PC relative base (usually current opcode PC + 2)
+                // 디코더에서 bd를 계산할 때 이미 조정되었을 수 있으나, 사양에 따라 처리
+                addr = m68k.pc; 
             }
-            break :blk m68k.a[info.reg] +% @as(u32, @bitCast(@as(i32, disp)));
-        },
-        .Address => |addr| blk: {
-            var val = addr;
-            if (val == 0) {
-                // 절대 주소 읽기 (32비트 가정)
-                val = try m68k.memory.read32(m68k.pc + 2);
+            
+            // 2. Base displacement
+            addr = addr +% @as(u32, @bitCast(info.base_disp));
+            
+            if (info.is_mem_indirect) {
+                // Memory Indirect
+                if (!info.is_post_indexed) {
+                    // Pre-indexed: [ bd + An + Xn ] + od
+                    if (info.index_reg) |idx| {
+                        addr = addr +% try getIndexValue(m68k, idx);
+                    }
+                    addr = try m68k.memory.read32(addr);
+                    addr = addr +% @as(u32, @bitCast(info.outer_disp));
+                } else {
+                    // Post-indexed: [ bd + An ] + Xn + od
+                    addr = try m68k.memory.read32(addr);
+                    if (info.index_reg) |idx| {
+                        addr = addr +% try getIndexValue(m68k, idx);
+                    }
+                    addr = addr +% @as(u32, @bitCast(info.outer_disp));
+                }
+            } else {
+                // No indirect: bd + An + Xn
+                if (info.index_reg) |idx| {
+                    addr = addr +% try getIndexValue(m68k, idx);
+                }
             }
-            break :blk val;
+            
+            return addr;
         },
         else => 0,
     };
+}
+
+fn getIndexValue(m68k: *const cpu.M68k, idx: anytype) !u32 {
+    var val: u32 = if (idx.is_addr) m68k.a[idx.reg] else m68k.d[idx.reg];
+    if (!idx.is_long) {
+        val = @as(u32, @bitCast(@as(i32, @as(i16, @bitCast(@as(u16, @truncate(val)))))));
+    }
+    return val *% idx.scale;
 }
 
 fn setArithmeticFlags(m68k: *cpu.M68k, dst: u32, src: u32, result: u32, size: decoder.DataSize, is_sub: bool) void {
@@ -1724,6 +1752,52 @@ fn evaluateCondition(m68k: *const cpu.M68k, condition: u4) bool {
         0xE => (n and v and !z) or (!n and !v and !z),
         0xF => z or (n and !v) or (!n and v),
     };
+}
+
+// ============================================================================
+// MOVEC - Move Control Register (68020)
+// ============================================================================
+fn executeMovec(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    const control_reg = inst.control_reg orelse return error.InvalidInstruction;
+    
+    if (inst.is_to_control) {
+        // Rc ← Rn (레지스터 → 컨트롤 레지스터)
+        const value = switch (inst.src) {
+            .DataReg => |reg| m68k.d[reg],
+            .AddrReg => |reg| m68k.a[reg],
+            else => return error.InvalidOperand,
+        };
+        
+        switch (control_reg) {
+            0x000 => {},  // SFC (Source Function Code) - 미구현
+            0x001 => {},  // DFC (Destination Function Code) - 미구현
+            0x002 => m68k.cacr = value,  // CACR (Cache Control Register)
+            0x800 => {},  // USP (User Stack Pointer) - 미구현
+            0x801 => m68k.vbr = value,   // VBR (Vector Base Register)
+            0x802 => m68k.caar = value,  // CAAR (Cache Address Register)
+            else => return error.InvalidControlRegister,
+        }
+    } else {
+        // Rn ← Rc (컨트롤 레지스터 → 레지스터)
+        const value: u32 = switch (control_reg) {
+            0x000 => 0,  // SFC
+            0x001 => 0,  // DFC
+            0x002 => m68k.cacr,  // CACR
+            0x800 => 0,  // USP
+            0x801 => m68k.vbr,   // VBR
+            0x802 => m68k.caar,  // CAAR
+            else => return error.InvalidControlRegister,
+        };
+        
+        switch (inst.src) {
+            .DataReg => |reg| m68k.d[reg] = value,
+            .AddrReg => |reg| m68k.a[reg] = value,
+            else => return error.InvalidOperand,
+        }
+    }
+    
+    m68k.pc += inst.size;
+    return 12;  // 68020: 12 사이클
 }
 
 test "Executor NOP" {

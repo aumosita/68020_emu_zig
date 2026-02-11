@@ -184,6 +184,57 @@ pub fn main() !void {
         try stdout.print("  ✗ FAIL\n", .{});
     }
     
+    // --- 68020 Specific Tests ---
+    try stdout.print("\n68020 Specific Feature Tests\n", .{});
+    try stdout.print("---------------------------\n", .{});
+
+    // Test 13: 68020 Brief Extension (d8(An, Xn.size*scale))
+    total += 1;
+    try stdout.print("Test {}: Brief Extension - d8(A0, D0.L*4)\n", .{total});
+    m68k.a[0] = 0x2000;
+    m68k.d[0] = 0x10;
+    // MOVE.L (0x8, A0, D0.L*4), D1
+    // Opcode: 0x2230
+    // Extension: 0x8808 (D0, Long, Scale 4, Displacement 8)
+    try m68k.memory.write16(0x1000, 0x2230);
+    try m68k.memory.write16(0x1002, 0x8808);
+    try m68k.memory.write32(0x2000 + 0x10*4 + 0x8, 0x12345678);
+    m68k.pc = 0x1000;
+    _ = try m68k.step();
+    if (m68k.d[1] == 0x12345678) {
+        try stdout.print("  ✓ PASS (D1=0x{X})\n", .{m68k.d[1]});
+        passed += 1;
+    } else {
+        try stdout.print("  ✗ FAIL (D1=0x{X}, expected 0x12345678)\n", .{m68k.d[1]});
+    }
+
+    // Test 14: 68020 Full Extension (Memory Indirect Post-indexed)
+    // ([bd, An], Xn, od)
+    total += 1;
+    try stdout.print("\nTest {}: Full Extension - ([0x10, A0], D0.L*2, 0x20)\n", .{total});
+    m68k.a[0] = 0x3000;
+    m68k.d[0] = 0x5;
+    // 1. [0x3000 + 0x10] -> 0x4000
+    // 2. 0x4000 + (D0*2) + 0x20 -> 0x402A
+    // 3. [0x402A] -> 0xDEADBEEF
+    try m68k.memory.write32(0x3010, 0x4000);
+    try m68k.memory.write32(0x4000 + 5*2 + 0x20, 0xDEADBEEF);
+    
+    // Opcode: 0x2230
+    // Extension: 0x8137 (Full, D0, Scale 2, Indirect Post, bd word, od word)
+    try m68k.memory.write16(0x1000, 0x2230);
+    try m68k.memory.write16(0x1002, 0x8137);
+    try m68k.memory.write16(0x1004, 0x0010); // bd
+    try m68k.memory.write16(0x1006, 0x0020); // od
+    m68k.pc = 0x1000;
+    _ = try m68k.step();
+    if (m68k.d[1] == 0xDEADBEEF) {
+        try stdout.print("  ✓ PASS (D1=0x{X})\n", .{m68k.d[1]});
+        passed += 1;
+    } else {
+        try stdout.print("  ✗ FAIL (D1=0x{X})\n", .{m68k.d[1]});
+    }
+
     // Summary
     try stdout.print("\n" ++ "=" ** 50 ++ "\n", .{});
     try stdout.print("Test Results: {} / {} passed ({d:.1}%)\n", .{

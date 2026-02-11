@@ -87,12 +87,19 @@ pub const M68k = struct {
         return self.vbr + (@as(u32, vector_number) * 4);
     }
     
+    pub fn readWord(self: *const M68k, addr: u32) u16 {
+        return self.memory.read16(addr) catch 0;
+    }
+    
     pub fn step(self: *M68k) !u32 {
         // 명령어 페치
         const opcode = try self.memory.read16(self.pc);
         
-        // 명령어 디코드
-        const instruction = try self.decoder.decode(opcode, self.pc, &dummyRead);
+        // Thread-local 전역 변수 사용 (Zig의 제약)
+        M68k.current_instance = self;
+        defer M68k.current_instance = null;
+        
+        const instruction = try self.decoder.decode(opcode, self.pc, &M68k.globalReadWord);
         
         // 명령어 실행
         const cycles_used = try self.executor.execute(self, &instruction);
@@ -101,7 +108,12 @@ pub const M68k = struct {
         return cycles_used;
     }
     
-    fn dummyRead(_: u32) u16 {
+    threadlocal var current_instance: ?*const M68k = null;
+    
+    fn globalReadWord(addr: u32) u16 {
+        if (M68k.current_instance) |inst| {
+            return inst.memory.read16(addr) catch 0;
+        }
         return 0;
     }
     
@@ -210,4 +222,102 @@ test "M68k VBR exception vector calculation" {
     m68k.vbr = 0xFF000000;
     try std.testing.expectEqual(@as(u32, 0xFF000000), m68k.getExceptionVector(0));
     try std.testing.expectEqual(@as(u32, 0xFF0000FC), m68k.getExceptionVector(63));
+}
+
+test "M68k MOVEC VBR" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+    
+    // MOVEC D0, VBR (0x4E7B 0x0801)
+    m68k.d[0] = 0x12345678;
+    try m68k.memory.write16(0x1000, 0x4E7B);  // MOVEC to control
+    try m68k.memory.write16(0x1002, 0x0801);  // D0 -> VBR
+    m68k.pc = 0x1000;
+    
+    _ = try m68k.step();
+    
+    try std.testing.expectEqual(@as(u32, 0x12345678), m68k.vbr);
+    try std.testing.expectEqual(@as(u32, 0x1004), m68k.pc);
+}
+
+test "M68k MOVEC from VBR" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+    
+    // MOVEC VBR, D1 (0x4E7A 0x1801)
+    m68k.vbr = 0xDEADBEEF;
+    try m68k.memory.write16(0x1000, 0x4E7A);  // MOVEC from control
+    try m68k.memory.write16(0x1002, 0x1801);  // VBR -> D1
+    m68k.pc = 0x1000;
+    
+    _ = try m68k.step();
+    
+    try std.testing.expectEqual(@as(u32, 0xDEADBEEF), m68k.d[1]);
+    try std.testing.expectEqual(@as(u32, 0x1004), m68k.pc);
+}
+
+test "M68k MOVEC CACR" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+    
+    // MOVEC D2, CACR (0x4E7B 0x2002)
+    m68k.d[2] = 0x00000001;  // Enable cache
+    try m68k.memory.write16(0x1000, 0x4E7B);
+    try m68k.memory.write16(0x1002, 0x2002);  // D2 -> CACR
+    m68k.pc = 0x1000;
+    
+    _ = try m68k.step();
+    
+    try std.testing.expectEqual(@as(u32, 0x00000001), m68k.cacr);
+    
+    // MOVEC CACR, D3 (0x4E7A 0x3002)
+    try m68k.memory.write16(0x1004, 0x4E7A);
+    try m68k.memory.write16(0x1006, 0x3002);  // CACR -> D3
+    
+    _ = try m68k.step();
+    
+    try std.testing.expectEqual(@as(u32, 0x00000001), m68k.d[3]);
+}
+
+test "M68k EXTB.L sign extension" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+    
+    // EXTB.L D0 (0x49C0): 양수 byte -> long
+    m68k.d[0] = 0xDEADBE42;  // byte = 0x42
+    try m68k.memory.write16(0x1000, 0x49C0);  // EXTB.L D0
+    m68k.pc = 0x1000;
+    
+    _ = try m68k.step();
+    
+    try std.testing.expectEqual(@as(u32, 0x00000042), m68k.d[0]);
+    try std.testing.expectEqual(@as(u32, 0x1002), m68k.pc);
+    
+    // EXTB.L D1 (0x49C1): 음수 byte -> long
+    m68k.d[1] = 0x123456FF;  // byte = 0xFF (-1)
+    try m68k.memory.write16(0x1002, 0x49C1);  // EXTB.L D1
+    
+    _ = try m68k.step();
+    
+    try std.testing.expectEqual(@as(u32, 0xFFFFFFFF), m68k.d[1]);
+    
+    // EXTB.L D2 (0x49C2): 0x80 (-128)
+    m68k.d[2] = 0x00000080;
+    try m68k.memory.write16(0x1004, 0x49C2);  // EXTB.L D2
+    
+    _ = try m68k.step();
+    
+    try std.testing.expectEqual(@as(u32, 0xFFFFFF80), m68k.d[2]);
+    
+    // EXTB.L D3 (0x49C3): 0x7F (127)
+    m68k.d[3] = 0xFFFFFF7F;
+    try m68k.memory.write16(0x1006, 0x49C3);  // EXTB.L D3
+    
+    _ = try m68k.step();
+    
+    try std.testing.expectEqual(@as(u32, 0x0000007F), m68k.d[3]);
 }

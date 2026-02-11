@@ -8,13 +8,6 @@ pub const Instruction = struct {
     dst: Operand,
     data_size: DataSize,
     
-    // MOVEC용 추가 필드
-    control_reg: ?u16 = null,  // VBR=0x801, CACR=0x002, CAAR=0x802
-    is_to_control: bool = false,  // true: Rc ← Rn, false: Rn ← Rc
-    
-    // EXTB용 추가 필드
-    is_extb: bool = false,  // true: EXTB.L (byte->long), false: 일반 EXT
-    
     pub fn init() Instruction {
         return .{
             .opcode = 0,
@@ -23,9 +16,6 @@ pub const Instruction = struct {
             .src = .{ .None = {} },
             .dst = .{ .None = {} },
             .data_size = .Long,
-            .control_reg = null,
-            .is_to_control = false,
-            .is_extb = false,
         };
     }
 };
@@ -79,7 +69,6 @@ pub const Mnemonic = enum {
     CHK,
     ILLEGAL,
     RESET, STOP,
-    MOVEC,  // 68020: Move Control Register
     
     // 비교
     CMP, CMPA, CMPI, CMPM,
@@ -143,11 +132,31 @@ pub const Decoder = struct {
     }
     
     pub fn decode(self: *const Decoder, opcode: u16, pc: u32, read_word: *const fn(u32) u16) !Instruction {
+        const high4 = (opcode >> 12) & 0xF;
+        
+        return switch (high4) {
+            0x0 => try self.decodeGroup0(opcode, pc, read_word),
+            0x1, 0x2, 0x3 => try self.decodeMove(opcode, pc, read_word),
+            0x4 => try self.decodeGroup4(opcode, pc, read_word),
+            0x5 => try self.decodeGroup5(opcode, pc, read_word),
+            0x6 => try self.decodeBranch(opcode, pc, read_word),
+            0x7 => self.decodeMoveq(opcode),
+            0x8 => try self.decodeGroup8(opcode, pc, read_word),
+            0x9, 0xD => try self.decodeArithmetic(opcode, pc, read_word, high4 == 0xD),
+            0xB => try self.decodeGroupB(opcode, pc, read_word),
+            0xC => try self.decodeGroupC(opcode, pc, read_word),
+            0xE => try self.decodeShiftRotate(opcode, pc, read_word),
+            else => self.unknownInstruction(opcode),
+        };
+    }
+    
+    // ============================================================================
+    // Group 0x0: Bit operations and immediate operations
+    // ============================================================================
+    fn decodeGroup0(self: *const Decoder, opcode: u16, pc: u32, read_word: *const fn(u32) u16) !Instruction {
         var current_pc = pc + 2;
         var inst = Instruction.init();
         inst.opcode = opcode;
-        
-        const high4 = (opcode >> 12) & 0xF;
         
         switch (high4) {
             0x0 => {
@@ -216,26 +225,6 @@ pub const Decoder = struct {
                     inst.mnemonic = .RTE;
                 } else if (opcode == 0x4E77) {
                     inst.mnemonic = .RTR;
-                } else if (opcode == 0x4E7A or opcode == 0x4E7B) {
-                    // MOVEC (68020)
-                    inst.mnemonic = .MOVEC;
-                    inst.data_size = .Long;
-                    
-                    const ext_word = read_word(current_pc);
-                    current_pc += 2;
-                    
-                    const reg_num = @as(u8, @truncate((ext_word >> 12) & 0xF));
-                    const is_addr_reg = ((ext_word >> 15) & 1) != 0;
-                    const control_reg = ext_word & 0xFFF;
-                    
-                    inst.control_reg = control_reg;
-                    inst.is_to_control = (opcode == 0x4E7B);  // 0x4E7B = Rc ← Rn
-                    
-                    if (is_addr_reg) {
-                        inst.src = .{ .AddrReg = @truncate(reg_num & 0x7) };
-                    } else {
-                        inst.src = .{ .DataReg = @truncate(reg_num & 0x7) };
-                    }
                 } else if ((opcode & 0xFFF0) == 0x4E40) {
                     inst.mnemonic = .TRAP;
                     inst.src = .{ .Immediate8 = @truncate(opcode & 0xF) };
@@ -309,25 +298,10 @@ pub const Decoder = struct {
                         inst.mnemonic = .PEA;
                         inst.src = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, .Long);
                     }
-                } else if ((opcode & 0xFFC0) == 0x4880 or (opcode & 0xFFC0) == 0x48C0 or (opcode & 0xFFC0) == 0x49C0) {
+                } else if ((opcode & 0xFFC0) == 0x4880 or (opcode & 0xFFC0) == 0x48C0) {
                     inst.mnemonic = .EXT;
                     inst.dst = .{ .DataReg = @truncate(opcode & 0x7) };
-                    
-                    // EXT 모드 판별
-                    const mode = (opcode >> 6) & 0x7;
-                    if (mode == 7) {
-                        // EXTB.L (68020): byte -> long
-                        inst.data_size = .Long;
-                        inst.is_extb = true;
-                    } else if ((opcode & 0x40) != 0) {
-                        // EXT.L: word -> long
-                        inst.data_size = .Long;
-                        inst.is_extb = false;
-                    } else {
-                        // EXT.W: byte -> word
-                        inst.data_size = .Word;
-                        inst.is_extb = false;
-                    }
+                    inst.data_size = if ((opcode & 0x40) != 0) .Long else .Word;
                 } else {
                     inst.mnemonic = .UNKNOWN;
                 }
@@ -670,24 +644,4 @@ test "Decoder MOVEQ" {
     const dummy_read = struct { fn read(_: u32) u16 { return 0; } }.read;
     const inst = try decoder.decode(0x702A, 0, &dummy_read);
     try std.testing.expectEqual(Mnemonic.MOVEQ, inst.mnemonic);
-}
-
-test "Decoder MOVEC" {
-    const decoder = Decoder.init();
-    
-    // MOVEC D0, VBR (0x4E7B 0x0801)
-    const ext_word: u16 = 0x0801;
-    const read_ext = struct {
-        var word: u16 = undefined;
-        fn read(_: u32) u16 {
-            return word;
-        }
-    };
-    read_ext.word = ext_word;
-    
-    const inst = try decoder.decode(0x4E7B, 0x1000, &read_ext.read);
-    try std.testing.expectEqual(Mnemonic.MOVEC, inst.mnemonic);
-    try std.testing.expectEqual(@as(?u16, 0x801), inst.control_reg);
-    try std.testing.expectEqual(true, inst.is_to_control);
-    try std.testing.expectEqual(@as(u8, 4), inst.size);
 }
