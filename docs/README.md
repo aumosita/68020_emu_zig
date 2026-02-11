@@ -24,3 +24,6 @@
 
 - `LAYERING_CRITERIA.md`
   파일 계층화/책임 분리 기준
+
+- `cycle-model.md`
+  사이클 정책(고정/검증됨 vs 근사)과 회귀 기준
