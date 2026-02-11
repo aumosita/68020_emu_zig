@@ -63,6 +63,7 @@ pub const Executor = struct {
             .BCLR => return try executeBclr(m68k, inst),
             .BCHG => return try executeBchg(m68k, inst),
             .MOVEC => return try executeMovec(m68k, inst),
+            .MOVEUSP => return try executeMoveUsp(m68k, inst),
             .LINK => return try executeLink(m68k, inst),
             .UNLK => return try executeUnlk(m68k, inst),
             .PEA => return try executePea(m68k, inst),
@@ -458,15 +459,15 @@ fn executeMovec(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
             1 => m.dfc = @truncate(val & 7),
             2 => m.setCacr(val),
             0x800 => {
-                m.setStackPointer(.User, val);
+                m.setStackRegister(.User, val);
             },
             0x801 => m.vbr = val,
             0x802 => m.caar = val,
             0x803 => {
-                m.setStackPointer(.Master, val);
+                m.setStackRegister(.Master, val);
             },
             0x804 => {
-                m.setStackPointer(.Interrupt, val);
+                m.setStackRegister(.Interrupt, val);
             },
             else => return error.InvalidControlRegister,
         }
@@ -475,16 +476,40 @@ fn executeMovec(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
             0 => m.sfc,
             1 => m.dfc,
             2 => m.cacr,
-            0x800 => m.getStackPointer(.User),
+            0x800 => m.getStackRegister(.User),
             0x801 => m.vbr,
             0x802 => m.caar,
-            0x803 => m.getStackPointer(.Master),
-            0x804 => m.getStackPointer(.Interrupt),
+            0x803 => m.getStackRegister(.Master),
+            0x804 => m.getStackRegister(.Interrupt),
             else => return error.InvalidControlRegister,
         };
         try setOperandValue(m, i.src, val, .Long);
     }
     m.pc += 4; return 12;
+}
+fn executeMoveUsp(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
+    if (!m.getFlag(cpu.M68k.FLAG_S)) {
+        try m.enterException(8, m.pc, 0, null);
+        return 34;
+    }
+
+    switch (i.src) {
+        .AddrReg => |r| {
+            // MOVE An,USP
+            m.setStackRegister(.User, m.a[r]);
+        },
+        else => {
+            // MOVE USP,An
+            const r = switch (i.dst) {
+                .AddrReg => |areg| areg,
+                else => return error.InvalidOperand,
+            };
+            m.a[r] = m.getStackRegister(.User);
+        },
+    }
+
+    m.pc += 2;
+    return 4;
 }
 fn executeLink(m: *cpu.M68k, i: *const decoder.Instruction) !u32 { const r = switch (i.dst) { .AddrReg => |v| v, else => 7 }; const d: i16 = @bitCast(switch (i.src) { .Immediate16 => |v| v, else => 0 }); m.a[7] -= 4; try m.memory.write32(m.a[7], m.a[r]); m.a[r] = m.a[7]; m.a[7] = @bitCast(@as(i32, @bitCast(m.a[7])) + @as(i32, d)); m.pc += 4; return 16; }
 fn executeUnlk(m: *cpu.M68k, i: *const decoder.Instruction) !u32 { const r = switch (i.dst) { .AddrReg => |v| v, else => 7 }; m.a[7] = m.a[r]; m.a[r] = try m.memory.read32(m.a[7]); m.a[7] += 4; m.pc += i.size; return 12; }
@@ -993,45 +1018,67 @@ fn isWithinBounds(value: u32, lower: u32, upper: u32, s: decoder.DataSize) bool 
     return compareSized(value, lower, s) >= 0 and compareSized(value, upper, s) <= 0;
 }
 fn getOperandValue(m: *cpu.M68k, op: decoder.Operand, s: decoder.DataSize) !u32 {
+    const readMem = struct {
+        fn run(mm: *cpu.M68k, addr: u32, sz: decoder.DataSize) !u32 {
+            mm.noteDataAccess(addr, false);
+            return if (sz == .Byte)
+                try mm.memory.read8(addr)
+            else if (sz == .Word)
+                try mm.memory.read16(addr)
+            else
+                try mm.memory.read32(addr);
+        }
+    }.run;
     return switch (op) {
         .DataReg => |r| getRegisterValue(m.d[r], s), .AddrReg => |r| m.a[r], .Immediate8 => |v| v, .Immediate16 => |v| v, .Immediate32 => |v| v,
-        .AddrIndirect => |r| if (s == .Byte) try m.memory.read8(m.a[r]) else if (s == .Word) try m.memory.read16(m.a[r]) else try m.memory.read32(m.a[r]),
-        .AddrPostInc => |r| { const a = m.a[r]; const inc: u32 = if (s == .Byte) (if (r == 7) 2 else 1) else if (s == .Word) 2 else 4; m.a[r] += inc; return if (s == .Byte) try m.memory.read8(a) else if (s == .Word) try m.memory.read16(a) else try m.memory.read32(a); },
-        .AddrPreDec => |r| { const inc: u32 = if (s == .Byte) (if (r == 7) 2 else 1) else if (s == .Word) 2 else 4; m.a[r] -= inc; return if (s == .Byte) try m.memory.read8(m.a[r]) else if (s == .Word) try m.memory.read16(m.a[r]) else try m.memory.read32(m.a[r]); },
-        .Address => |a| if (s == .Byte) try m.memory.read8(a) else if (s == .Word) try m.memory.read16(a) else try m.memory.read32(a),
-        .AddrDisplace => |i| { const a = @as(u32, @bitCast(@as(i32, @bitCast(m.a[i.reg])) + @as(i32, i.displacement))); return if (s == .Byte) try m.memory.read8(a) else if (s == .Word) try m.memory.read16(a) else try m.memory.read32(a); },
+        .AddrIndirect => |r| try readMem(m, m.a[r], s),
+        .AddrPostInc => |r| { const a = m.a[r]; const inc: u32 = if (s == .Byte) (if (r == 7) 2 else 1) else if (s == .Word) 2 else 4; m.a[r] += inc; return try readMem(m, a, s); },
+        .AddrPreDec => |r| { const inc: u32 = if (s == .Byte) (if (r == 7) 2 else 1) else if (s == .Word) 2 else 4; m.a[r] -= inc; return try readMem(m, m.a[r], s); },
+        .Address => |a| try readMem(m, a, s),
+        .AddrDisplace => |i| { const a = @as(u32, @bitCast(@as(i32, @bitCast(m.a[i.reg])) + @as(i32, i.displacement))); return try readMem(m, a, s); },
         .ComplexEA => |ea| {
             const a = try resolveComplexEA(m, ea);
-            return if (s == .Byte) try m.memory.read8(a) else if (s == .Word) try m.memory.read16(a) else try m.memory.read32(a);
+            return try readMem(m, a, s);
         },
         else => 0,
     };
 }
 fn setOperandValue(m: *cpu.M68k, op: decoder.Operand, v: u32, s: decoder.DataSize) !void {
+    const writeMem = struct {
+        fn run(mm: *cpu.M68k, addr: u32, value: u32, sz: decoder.DataSize) !void {
+            mm.noteDataAccess(addr, true);
+            if (sz == .Byte)
+                try mm.memory.write8(addr, @truncate(value))
+            else if (sz == .Word)
+                try mm.memory.write16(addr, @truncate(value))
+            else
+                try mm.memory.write32(addr, value);
+        }
+    }.run;
     switch (op) {
         .DataReg => |r| setRegisterValue(&m.d[r], v, s),
         .AddrReg => |r| m.a[r] = v,
         .AddrIndirect => |r| {
-            if (s == .Byte) try m.memory.write8(m.a[r], @truncate(v)) else if (s == .Word) try m.memory.write16(m.a[r], @truncate(v)) else try m.memory.write32(m.a[r], v);
+            try writeMem(m, m.a[r], v, s);
         },
         .AddrPostInc => |r| {
             const a = m.a[r];
             const inc: u32 = if (s == .Byte) (if (r == 7) 2 else 1) else if (s == .Word) 2 else 4;
-            if (s == .Byte) try m.memory.write8(a, @truncate(v)) else if (s == .Word) try m.memory.write16(a, @truncate(v)) else try m.memory.write32(a, v);
+            try writeMem(m, a, v, s);
             m.a[r] += inc;
         },
         .AddrPreDec => |r| {
             const inc: u32 = if (s == .Byte) (if (r == 7) 2 else 1) else if (s == .Word) 2 else 4;
             m.a[r] -= inc;
-            if (s == .Byte) try m.memory.write8(m.a[r], @truncate(v)) else if (s == .Word) try m.memory.write16(m.a[r], @truncate(v)) else try m.memory.write32(m.a[r], v);
+            try writeMem(m, m.a[r], v, s);
         },
         .AddrDisplace => |i| {
             const a = @as(u32, @bitCast(@as(i32, @bitCast(m.a[i.reg])) + @as(i32, i.displacement)));
-            if (s == .Byte) try m.memory.write8(a, @truncate(v)) else if (s == .Word) try m.memory.write16(a, @truncate(v)) else try m.memory.write32(a, v);
+            try writeMem(m, a, v, s);
         },
         .ComplexEA => |ea| {
             const a = try resolveComplexEA(m, ea);
-            if (s == .Byte) try m.memory.write8(a, @truncate(v)) else if (s == .Word) try m.memory.write16(a, @truncate(v)) else try m.memory.write32(a, v);
+            try writeMem(m, a, v, s);
         },
         else => {},
     }
@@ -1081,6 +1128,7 @@ fn resolveComplexEA(m: *cpu.M68k, ea: std.meta.FieldType(decoder.Operand, .Compl
         }
     }
 
+    m.noteDataAccess(ptr_addr, false);
     var effective = try m.memory.read32(ptr_addr);
     if (ea.is_post_indexed) {
         if (ea.index_reg) |idx| {

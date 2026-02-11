@@ -68,10 +68,18 @@ docs/
 ## C API 요약
 
 - 생성/해제: `m68k_create`, `m68k_destroy`, `m68k_reset`
+- 컨텍스트 기반 생성/해제: `m68k_context_create`, `m68k_context_destroy`, `m68k_create_in_context`, `m68k_destroy_in_context`
+- 외부 allocator callback: `m68k_context_set_allocator_callbacks`
 - 실행: `m68k_step`, `m68k_execute`
 - 인터럽트: `m68k_set_irq`, `m68k_set_irq_vector`, `m68k_set_spurious_irq`
 - 레지스터/PC: `m68k_set_pc`, `m68k_get_pc`, `m68k_set_reg_d`, `m68k_get_reg_d`, `m68k_set_reg_a`, `m68k_get_reg_a`
 - 메모리: `m68k_write_memory_8/16/32`, `m68k_read_memory_8/16/32`, `m68k_load_binary`
+- 메모리(v2, 권장): `m68k_write_memory_8/16/32_status`, `m68k_read_memory_8/16/32_status`
+
+### C API 마이그레이션 노트
+
+- 구 메모리 API(`m68k_read_memory_*`, `m68k_write_memory_*`)는 호환성 유지를 위해 남아 있지만, 오류를 값으로 숨길 수 있으므로 신규 통합에서는 `*_status` API 사용을 권장합니다.
+- 멀티 인스턴스/스레드 환경에서는 전역 생성 API 대신 context API(`m68k_context_*`, `m68k_create_in_context`) 사용을 권장합니다.
 
 ## 문서
 

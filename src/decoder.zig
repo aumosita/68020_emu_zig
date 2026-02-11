@@ -36,7 +36,7 @@ pub const Mnemonic = enum {
     CAS, CAS2, PACK, UNPK, CHK2, CMP2, CALLM, RTM, RTD, TRAPcc, BKPT,
     MULS_L, MULU_L, DIVS_L, DIVU_L,
     BRA, BSR, Bcc, DBcc, Scc, JMP, JSR, RTS, RTR, RTE, NOP,
-    TRAP, TRAPV, CHK, TAS, ILLEGAL, RESET, STOP, MOVEC,
+    TRAP, TRAPV, CHK, TAS, ILLEGAL, RESET, STOP, MOVEC, MOVEUSP,
     CMP, CMPA, CMPI, CMPM, TST, LINK, UNLK, LINEA, COPROC, UNKNOWN,
 };
 
@@ -276,6 +276,19 @@ pub const Decoder = struct {
         else if (o == 0x4E72) { i.mnemonic = .STOP; i.src = .{ .Immediate16 = rw(cpc) }; cpc += 2; }
         else if (o == 0x4E74) { i.mnemonic = .RTD; i.src = .{ .Immediate16 = rw(cpc) }; cpc += 2; }
         else if (o == 0x4E7A or o == 0x4E7B) { i.mnemonic = .MOVEC; const ext = rw(cpc); cpc += 2; i.control_reg = ext & 0xFFF; i.is_to_control = (o == 0x4E7B); const rn = @as(u3, @truncate((ext >> 12) & 7)); if (((ext >> 15) & 1) != 0) i.src = .{ .AddrReg = rn } else i.src = .{ .DataReg = rn }; }
+        else if ((o & 0xFFF0) == 0x4E60) {
+            i.mnemonic = .MOVEUSP;
+            const r: u3 = @truncate(o & 7);
+            if ((o & 0x8) != 0) {
+                // MOVE USP,An
+                i.src = .{ .None = {} };
+                i.dst = .{ .AddrReg = r };
+            } else {
+                // MOVE An,USP
+                i.src = .{ .AddrReg = r };
+                i.dst = .{ .None = {} };
+            }
+        }
         else if ((o & 0xFFF8) == 0x4848) { i.mnemonic = .BKPT; i.src = .{ .Immediate8 = @truncate(o & 7) }; }
         else if ((o & 0xFFF0) == 0x4E40) { i.mnemonic = .TRAP; i.src = .{ .Immediate8 = @truncate(o & 0xF) }; }
         else if ((o & 0xFFF8) == 0x4E50) { i.mnemonic = .LINK; i.dst = .{ .AddrReg = @truncate(o & 7) }; i.src = .{ .Immediate16 = rw(cpc) }; cpc += 2; }

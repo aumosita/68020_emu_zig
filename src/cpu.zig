@@ -42,6 +42,8 @@ pub const M68k = struct {
     decoder: decoder.Decoder,
     executor: executor.Executor,
     cycles: u64,
+    last_data_access_addr: u32,
+    last_data_access_is_write: bool,
     allocator: std.mem.Allocator,
     
     pub fn init(allocator: std.mem.Allocator) M68k {
@@ -74,6 +76,8 @@ pub const M68k = struct {
             .decoder = decoder.Decoder.init(),
             .executor = executor.Executor.init(),
             .cycles = 0,
+            .last_data_access_addr = 0,
+            .last_data_access_is_write = false,
             .allocator = allocator,
         };
     }
@@ -98,6 +102,8 @@ pub const M68k = struct {
         self.caar = 0;
         self.invalidateICache();
         self.cycles = 0;
+        self.last_data_access_addr = 0;
+        self.last_data_access_is_write = false;
     }
     
     pub fn getExceptionVector(self: *const M68k, vector_number: u8) u32 {
@@ -137,7 +143,11 @@ pub const M68k = struct {
                 return 50;
             },
             error.AddressError => {
-                try self.enterException(3, self.pc, 0, null);
+                try self.enterAddressErrorFrameA(self.pc, self.pc, .{
+                    .function_code = self.getProgramFunctionCode(),
+                    .space = .Program,
+                    .is_write = false,
+                });
                 self.cycles += 50;
                 return 50;
             },
@@ -158,7 +168,11 @@ pub const M68k = struct {
         };
         if (M68k.decode_fault_addr) |fault_addr| {
             if (M68k.decode_fault_kind == .Address) {
-                try self.enterException(3, self.pc, 0, null);
+                try self.enterAddressErrorFrameA(self.pc, fault_addr, .{
+                    .function_code = self.getProgramFunctionCode(),
+                    .space = .Program,
+                    .is_write = false,
+                });
             } else {
                 try self.enterBusErrorFrameA(self.pc, fault_addr, .{
                     .function_code = self.getProgramFunctionCode(),
@@ -169,18 +183,24 @@ pub const M68k = struct {
             self.cycles += 50 + fetch.penalty_cycles;
             return 50 + fetch.penalty_cycles;
         }
+        self.last_data_access_addr = self.pc;
+        self.last_data_access_is_write = false;
         const cycles_used = self.executor.execute(self, &instruction) catch |err| switch (err) {
             error.InvalidAddress => {
-                try self.enterBusErrorFrameA(self.pc, self.pc, .{
+                try self.enterBusErrorFrameA(self.pc, self.last_data_access_addr, .{
                     .function_code = self.dfc,
                     .space = .Data,
-                    .is_write = false,
+                    .is_write = self.last_data_access_is_write,
                 });
                 self.cycles += 50 + fetch.penalty_cycles;
                 return 50 + fetch.penalty_cycles;
             },
             error.AddressError => {
-                try self.enterException(3, self.pc, 0, null);
+                try self.enterAddressErrorFrameA(self.pc, self.last_data_access_addr, .{
+                    .function_code = self.dfc,
+                    .space = .Data,
+                    .is_write = self.last_data_access_is_write,
+                });
                 self.cycles += 50 + fetch.penalty_cycles;
                 return 50 + fetch.penalty_cycles;
             },
@@ -226,6 +246,11 @@ pub const M68k = struct {
             executed += cycles_used;
         }
         return executed;
+    }
+
+    pub fn noteDataAccess(self: *M68k, addr: u32, is_write: bool) void {
+        self.last_data_access_addr = addr;
+        self.last_data_access_is_write = is_write;
     }
     
     pub inline fn getFlag(self: *const M68k, comptime flag: u16) bool {
@@ -337,7 +362,17 @@ pub const M68k = struct {
         return .{ .opcode = fetched, .penalty_cycles = 2 };
     }
 
-    fn enterBusErrorFrameA(self: *M68k, return_pc: u32, fault_addr: u32, access: memory.BusAccess) !void {
+    fn buildFormatAAccessWord(access: memory.BusAccess) u16 {
+        return (@as(u16, access.function_code) << 13) |
+            (if (access.space == .Program) @as(u16, 1) << 12 else 0) |
+            (if (access.is_write) @as(u16, 1) << 11 else 0);
+    }
+
+    fn readFaultInstructionWord(self: *const M68k, return_pc: u32) u16 {
+        return self.memory.read16(return_pc) catch 0;
+    }
+
+    fn enterFaultFrameA(self: *M68k, vector: u8, return_pc: u32, fault_addr: u32, access: memory.BusAccess) !void {
         const old_sr = self.sr;
         var sr_new = self.sr | FLAG_S;
         sr_new &= ~FLAG_M;
@@ -346,19 +381,23 @@ pub const M68k = struct {
         self.a[7] -= 24;
         try self.memory.write16(self.a[7], old_sr);
         try self.memory.write32(self.a[7] + 2, return_pc);
-        try self.memory.write16(self.a[7] + 6, (@as(u16, 0xA) << 12) | (@as(u16, 2) * 4));
+        try self.memory.write16(self.a[7] + 6, (@as(u16, 0xA) << 12) | (@as(u16, vector) * 4));
         try self.memory.write32(self.a[7] + 8, fault_addr);
-        const access_word: u16 = (@as(u16, access.function_code) << 13) |
-            (if (access.space == .Program) @as(u16, 1) << 12 else 0) |
-            (if (access.is_write) @as(u16, 1) << 11 else 0);
-        try self.memory.write16(self.a[7] + 12, access_word);
-        try self.memory.write16(self.a[7] + 14, 0);
+        try self.memory.write16(self.a[7] + 12, buildFormatAAccessWord(access));
+        try self.memory.write16(self.a[7] + 14, readFaultInstructionWord(self, return_pc));
         try self.memory.write16(self.a[7] + 16, 0);
         try self.memory.write16(self.a[7] + 18, 0);
         try self.memory.write16(self.a[7] + 20, 0);
         try self.memory.write16(self.a[7] + 22, 0);
+        self.pc = self.memory.read32(self.getExceptionVector(vector)) catch 0;
+    }
 
-        self.pc = self.memory.read32(self.getExceptionVector(2)) catch 0;
+    fn enterBusErrorFrameA(self: *M68k, return_pc: u32, fault_addr: u32, access: memory.BusAccess) !void {
+        try self.enterFaultFrameA(2, return_pc, fault_addr, access);
+    }
+
+    fn enterAddressErrorFrameA(self: *M68k, return_pc: u32, fault_addr: u32, access: memory.BusAccess) !void {
+        try self.enterFaultFrameA(3, return_pc, fault_addr, access);
     }
 
     pub fn raiseBusError(self: *M68k, fault_addr: u32, access: memory.BusAccess) !void {
@@ -383,6 +422,14 @@ pub const M68k = struct {
         };
     }
 
+    pub fn getStackRegister(self: *const M68k, kind: StackKind) u32 {
+        return switch (kind) {
+            .User => self.usp,
+            .Interrupt => self.isp,
+            .Master => self.msp,
+        };
+    }
+
     pub fn setStackPointer(self: *M68k, kind: StackKind, value: u32) void {
         switch (kind) {
             .User => self.usp = value,
@@ -391,6 +438,14 @@ pub const M68k = struct {
         }
         if (activeStackKind(self.sr) == kind) {
             self.a[7] = value;
+        }
+    }
+
+    pub fn setStackRegister(self: *M68k, kind: StackKind, value: u32) void {
+        switch (kind) {
+            .User => self.usp = value,
+            .Interrupt => self.isp = value,
+            .Master => self.msp = value,
         }
     }
 
@@ -520,6 +575,47 @@ test "M68k initialization" {
     try std.testing.expectEqual(@as(u16, 0x2700), m68k.sr);
 }
 
+test "M68k stack register fallback loads active A7 when target bank is zero" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    m68k.setSR(0x0000); // start in user mode
+    m68k.setStackPointer(.User, 0x4100);
+    m68k.setStackRegister(.Interrupt, 0);
+    m68k.setStackRegister(.Master, 0);
+
+    // User -> ISP should fallback to previous A7 because ISP is zero.
+    m68k.setSR(M68k.FLAG_S);
+    try std.testing.expectEqual(@as(u32, 0x4100), m68k.a[7]);
+    try std.testing.expectEqual(@as(u32, 0x4100), m68k.getStackRegister(.Interrupt));
+
+    // Change ISP active A7, then switch to MSP with zero MSP; fallback should use previous A7.
+    m68k.a[7] = 0x40F0;
+    m68k.setSR(M68k.FLAG_S | M68k.FLAG_M);
+    try std.testing.expectEqual(@as(u32, 0x40F0), m68k.a[7]);
+    try std.testing.expectEqual(@as(u32, 0x40F0), m68k.getStackRegister(.Master));
+    try std.testing.expectEqual(@as(u32, 0x40F0), m68k.getStackRegister(.Interrupt));
+}
+
+test "M68k reset initializes ISP/MSP from reset vector stack pointer" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    try m68k.memory.write32(0x0000, 0xCAFEB000); // initial SP
+    try m68k.memory.write32(0x0004, 0x00ABCDEF); // initial PC
+
+    m68k.reset();
+
+    try std.testing.expectEqual(@as(u32, 0xCAFEB000), m68k.a[7]);
+    try std.testing.expectEqual(@as(u32, 0xCAFEB000), m68k.getStackRegister(.Interrupt));
+    try std.testing.expectEqual(@as(u32, 0xCAFEB000), m68k.getStackRegister(.Master));
+    try std.testing.expectEqual(@as(u32, 0), m68k.getStackRegister(.User));
+    try std.testing.expectEqual(@as(u32, 0x00ABCDEF), m68k.pc);
+    try std.testing.expectEqual(@as(u16, 0x2700), m68k.sr);
+}
+
 test "M68k MOVEC VBR" {
     const allocator = std.testing.allocator;
     var m68k = M68k.init(allocator);
@@ -618,6 +714,27 @@ test "M68k bus error during instruction fetch creates format A frame" {
     try std.testing.expectEqual(@as(u32, 0x6200), m68k.pc);
     try std.testing.expectEqual(@as(u32, 0x63E8), m68k.a[7]); // 24-byte format A frame
     try std.testing.expectEqual(@as(u16, 0xA008), try m68k.memory.read16(0x63EE)); // format A, vector 2
+    try std.testing.expectEqual(@as(u32, m68k.memory.size - 1), try m68k.memory.read32(0x63F0)); // fault address
+    try std.testing.expectEqual(@as(u16, 0xD000), try m68k.memory.read16(0x63F4)); // FC=supervisor program read
+}
+
+test "M68k decode extension fetch bus error preserves faulting address in format A frame" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.initWithConfig(allocator, .{ .size = 0x1000 });
+    defer m68k.deinit();
+
+    try m68k.memory.write32(m68k.getExceptionVector(2), 0x0F00);
+    try m68k.memory.write16(0x0FFE, 0x3005); // decode consumes extension word at 0x1000
+    m68k.pc = 0x0FFE;
+    m68k.a[7] = 0x0700;
+    m68k.setSR(0x2000);
+
+    _ = try m68k.step();
+
+    try std.testing.expectEqual(@as(u32, 0x0F00), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 0x06E8), m68k.a[7]); // format A frame size
+    try std.testing.expectEqual(@as(u16, 0xA008), try m68k.memory.read16(0x06EE)); // vector 2
+    try std.testing.expectEqual(@as(u32, 0x1000), try m68k.memory.read32(0x06F0)); // precise decode fault address
 }
 
 test "M68k ABCD - Add BCD" {
@@ -836,6 +953,61 @@ test "M68k MOVEC - Control Register Access" {
     try std.testing.expectEqual(@as(u32, 0x00000101), m68k.d[3]);
 }
 
+test "M68k MOVEC stack registers do not force active A7 sync" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    m68k.setSR(0x0000); // establish user mode first
+    m68k.setStackRegister(.User, 0x1000);
+    m68k.setStackRegister(.Interrupt, 0x2000);
+    m68k.setStackRegister(.Master, 0x3000);
+    m68k.a[7] = 0x1000;
+    m68k.setSR(M68k.FLAG_S); // interrupt stack active
+
+    m68k.a[0] = 0xAAAA0000;
+    // MOVEC A0,ISP (0x804)
+    try m68k.memory.write16(0x200, 0x4E7B);
+    try m68k.memory.write16(0x202, 0x8804);
+    m68k.pc = 0x200;
+    _ = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 0xAAAA0000), m68k.getStackRegister(.Interrupt));
+    try std.testing.expectEqual(@as(u32, 0x2000), m68k.a[7]); // unchanged active A7
+
+    // MOVEC ISP,D1 reads the raw ISP register value.
+    try m68k.memory.write16(0x204, 0x4E7A);
+    try m68k.memory.write16(0x206, 0x1804);
+    m68k.pc = 0x204;
+    _ = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 0xAAAA0000), m68k.d[1]);
+
+    m68k.setSR(M68k.FLAG_S | M68k.FLAG_M); // master stack active
+    m68k.a[2] = 0xBBBB0000;
+    // MOVEC A2,MSP (0x803)
+    try m68k.memory.write16(0x208, 0x4E7B);
+    try m68k.memory.write16(0x20A, 0xA803);
+    m68k.pc = 0x208;
+    _ = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 0xBBBB0000), m68k.getStackRegister(.Master));
+    try std.testing.expectEqual(@as(u32, 0x3000), m68k.a[7]); // unchanged active A7
+
+    // MOVEC MSP,D2
+    try m68k.memory.write16(0x20C, 0x4E7A);
+    try m68k.memory.write16(0x20E, 0x2803);
+    m68k.pc = 0x20C;
+    _ = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 0xBBBB0000), m68k.d[2]);
+
+    m68k.a[3] = 0xCCCC0000;
+    // MOVEC A3,USP (0x800)
+    try m68k.memory.write16(0x210, 0x4E7B);
+    try m68k.memory.write16(0x212, 0xB800);
+    m68k.pc = 0x210;
+    _ = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 0xCCCC0000), m68k.getStackRegister(.User));
+    try std.testing.expectEqual(@as(u32, 0x3000), m68k.a[7]); // still master A7
+}
+
 test "M68k MOVEC privilege violation in user mode" {
     const allocator = std.testing.allocator;
     var m68k = M68k.init(allocator);
@@ -854,6 +1026,51 @@ test "M68k MOVEC privilege violation in user mode" {
 
     try std.testing.expectEqual(@as(u32, 0xD200), m68k.pc);
     try std.testing.expectEqual(@as(u3, 0), m68k.sfc);
+}
+
+test "M68k MOVE USP transfers and user restore consistency" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    m68k.setSR(0x2000); // supervisor
+    m68k.setStackRegister(.User, 0x11110000);
+    m68k.a[2] = 0x22220000;
+    const active_sp_before = m68k.a[7];
+
+    // MOVE A2,USP
+    try m68k.memory.write16(0xE000, 0x4E62);
+    // MOVE USP,A3
+    try m68k.memory.write16(0xE002, 0x4E6B);
+    m68k.pc = 0xE000;
+
+    _ = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 0x22220000), m68k.getStackRegister(.User));
+    try std.testing.expectEqual(active_sp_before, m68k.a[7]); // active ISP unchanged
+
+    _ = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 0x22220000), m68k.a[3]);
+
+    // Switching back to user mode should load the updated USP into A7.
+    m68k.setSR(0x0000);
+    try std.testing.expectEqual(@as(u32, 0x22220000), m68k.a[7]);
+}
+
+test "M68k MOVE USP privilege violation in user mode" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    try m68k.memory.write32(m68k.getExceptionVector(8), 0xE100);
+    try m68k.memory.write16(0xE000, 0x4E62); // MOVE A2,USP
+
+    m68k.pc = 0xE000;
+    m68k.a[2] = 0x12345678;
+    m68k.setSR(0x0000); // user mode
+    m68k.setStackPointer(.User, 0x2000);
+    _ = try m68k.step();
+
+    try std.testing.expectEqual(@as(u32, 0xE100), m68k.pc);
 }
 
 test "M68k MOVEP - Move Peripheral Data" {
@@ -1112,6 +1329,71 @@ test "M68k stack pointer banking (USP/ISP/MSP)" {
     try std.testing.expectEqual(@as(u32, 0x3333), m68k.a[7]);
 }
 
+test "M68k setSR stack transition matrix preserves banked pointers" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    m68k.setSR(0x0000); // establish user mode first
+    m68k.setStackPointer(.User, 0x1110);
+    m68k.setStackRegister(.Interrupt, 0x2220);
+    m68k.setStackRegister(.Master, 0x3330);
+
+    try std.testing.expectEqual(@as(u32, 0x1110), m68k.a[7]);
+
+    m68k.a[7] = 0x1111; // User -> User
+    m68k.setSR(0x0000);
+    try std.testing.expectEqual(@as(u32, 0x1111), m68k.getStackRegister(.User));
+    try std.testing.expectEqual(@as(u32, 0x1111), m68k.a[7]);
+
+    m68k.a[7] = 0x1112; // User -> ISP
+    m68k.setSR(M68k.FLAG_S);
+    try std.testing.expectEqual(@as(u32, 0x1112), m68k.getStackRegister(.User));
+    try std.testing.expectEqual(@as(u32, 0x2220), m68k.a[7]);
+
+    m68k.a[7] = 0x2221; // ISP -> ISP
+    m68k.setSR(M68k.FLAG_S);
+    try std.testing.expectEqual(@as(u32, 0x2221), m68k.getStackRegister(.Interrupt));
+    try std.testing.expectEqual(@as(u32, 0x2221), m68k.a[7]);
+
+    m68k.a[7] = 0x2222; // ISP -> MSP
+    m68k.setSR(M68k.FLAG_S | M68k.FLAG_M);
+    try std.testing.expectEqual(@as(u32, 0x2222), m68k.getStackRegister(.Interrupt));
+    try std.testing.expectEqual(@as(u32, 0x3330), m68k.a[7]);
+
+    m68k.a[7] = 0x3331; // MSP -> MSP
+    m68k.setSR(M68k.FLAG_S | M68k.FLAG_M);
+    try std.testing.expectEqual(@as(u32, 0x3331), m68k.getStackRegister(.Master));
+    try std.testing.expectEqual(@as(u32, 0x3331), m68k.a[7]);
+
+    m68k.a[7] = 0x3332; // MSP -> User
+    m68k.setSR(0x0000);
+    try std.testing.expectEqual(@as(u32, 0x3332), m68k.getStackRegister(.Master));
+    try std.testing.expectEqual(@as(u32, 0x1112), m68k.a[7]);
+
+    m68k.a[7] = 0x1113; // User -> MSP
+    m68k.setSR(M68k.FLAG_S | M68k.FLAG_M);
+    try std.testing.expectEqual(@as(u32, 0x1113), m68k.getStackRegister(.User));
+    try std.testing.expectEqual(@as(u32, 0x3332), m68k.a[7]);
+
+    m68k.a[7] = 0x3333; // MSP -> ISP
+    m68k.setSR(M68k.FLAG_S);
+    try std.testing.expectEqual(@as(u32, 0x3333), m68k.getStackRegister(.Master));
+    try std.testing.expectEqual(@as(u32, 0x2222), m68k.a[7]);
+
+    m68k.a[7] = 0x2223; // ISP -> User
+    m68k.setSR(0x0000);
+    try std.testing.expectEqual(@as(u32, 0x2223), m68k.getStackRegister(.Interrupt));
+    try std.testing.expectEqual(@as(u32, 0x1113), m68k.a[7]);
+
+    // M bit is ignored when S=0, so user stack stays active.
+    m68k.a[7] = 0x1114;
+    m68k.setSR(M68k.FLAG_M);
+    try std.testing.expect((m68k.sr & M68k.FLAG_S) == 0);
+    try std.testing.expectEqual(@as(u32, 0x1114), m68k.getStackRegister(.User));
+    try std.testing.expectEqual(@as(u32, 0x1114), m68k.a[7]);
+}
+
 test "M68k IRQ autovector handling" {
     const allocator = std.testing.allocator;
     var m68k = M68k.init(allocator);
@@ -1209,6 +1491,115 @@ test "M68k nested IRQ preemption by higher level" {
     _ = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0x4B00), m68k.pc);
     try std.testing.expectEqual(@as(u3, 5), @as(u3, @truncate((m68k.sr >> 8) & 7)));
+}
+
+test "M68k IRQ from user mode uses ISP and RTE restores USP" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    m68k.setSR(0x0000); // user mode
+    m68k.setStackPointer(.User, 0x1100);
+    m68k.setStackRegister(.Interrupt, 0x2100);
+    m68k.setStackRegister(.Master, 0x3100);
+    try std.testing.expectEqual(@as(u32, 0x1100), m68k.a[7]);
+
+    // Level 3 autovector handler: RTE
+    try m68k.memory.write32(m68k.getExceptionVector(27), 0x4600);
+    try m68k.memory.write16(0x4600, 0x4E73); // RTE
+    try m68k.memory.write16(0x0100, 0x4E71); // main NOP
+    m68k.pc = 0x0100;
+
+    m68k.setInterruptLevel(3);
+    _ = try m68k.step(); // IRQ entry
+
+    try std.testing.expectEqual(@as(u32, 0x4600), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 0x20F8), m68k.a[7]); // ISP frame pushed
+    try std.testing.expectEqual(@as(u32, 0x1100), m68k.getStackRegister(.User)); // USP preserved
+    try std.testing.expect((m68k.sr & M68k.FLAG_S) != 0);
+    try std.testing.expect((m68k.sr & M68k.FLAG_M) == 0);
+
+    _ = try m68k.step(); // RTE
+
+    try std.testing.expectEqual(@as(u32, 0x0100), m68k.pc);
+    try std.testing.expect((m68k.sr & M68k.FLAG_S) == 0); // back to user
+    try std.testing.expectEqual(@as(u32, 0x1100), m68k.a[7]); // USP restored
+    try std.testing.expectEqual(@as(u32, 0x2100), m68k.getStackRegister(.Interrupt)); // ISP frame consumed
+}
+
+test "M68k nested IRQ frames stay on ISP and unwind with RTE" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    m68k.setStackRegister(.Interrupt, 0x3200);
+    m68k.a[7] = 0x3200;
+    m68k.setSR(0x2000); // supervisor, interrupt stack active
+
+    // Level 2 and level 5 handlers both RTE.
+    try m68k.memory.write32(m68k.getExceptionVector(26), 0x4A00);
+    try m68k.memory.write32(m68k.getExceptionVector(29), 0x4B00);
+    try m68k.memory.write16(0x4A00, 0x4E73); // RTE
+    try m68k.memory.write16(0x4B00, 0x4E73); // RTE
+    try m68k.memory.write16(0x1400, 0x4E71); // main NOP
+    m68k.pc = 0x1400;
+
+    m68k.setInterruptLevel(2);
+    _ = try m68k.step(); // enter level 2
+    try std.testing.expectEqual(@as(u32, 0x4A00), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 0x31F8), m68k.a[7]);
+    try std.testing.expectEqual(@as(u3, 2), @as(u3, @truncate((m68k.sr >> 8) & 7)));
+
+    m68k.setInterruptLevel(5);
+    _ = try m68k.step(); // preempt to level 5 before executing level2 RTE
+    try std.testing.expectEqual(@as(u32, 0x4B00), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 0x31F0), m68k.a[7]);
+    try std.testing.expectEqual(@as(u3, 5), @as(u3, @truncate((m68k.sr >> 8) & 7)));
+
+    _ = try m68k.step(); // RTE from level 5 -> back to level 2 handler
+    try std.testing.expectEqual(@as(u32, 0x4A00), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 0x31F8), m68k.a[7]);
+    try std.testing.expectEqual(@as(u3, 2), @as(u3, @truncate((m68k.sr >> 8) & 7)));
+
+    _ = try m68k.step(); // RTE from level 2 -> back to main
+    try std.testing.expectEqual(@as(u32, 0x1400), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 0x3200), m68k.a[7]);
+    try std.testing.expectEqual(@as(u16, 0x2000), m68k.sr);
+    try std.testing.expectEqual(@as(u32, 0x3200), m68k.getStackRegister(.Interrupt));
+}
+
+test "M68k IRQ from master mode switches to ISP and RTE restores MSP" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    m68k.setSR(M68k.FLAG_S | M68k.FLAG_M); // master mode active
+    m68k.setStackPointer(.User, 0x1000);
+    m68k.setStackRegister(.Interrupt, 0x2000);
+    m68k.setStackPointer(.Master, 0x3000);
+
+    // Level 3 autovector handler: RTE
+    try m68k.memory.write32(m68k.getExceptionVector(27), 0x4700);
+    try m68k.memory.write16(0x4700, 0x4E73); // RTE
+    try m68k.memory.write16(0x0100, 0x4E71); // main NOP
+    m68k.pc = 0x0100;
+
+    m68k.setInterruptLevel(3);
+    _ = try m68k.step(); // IRQ entry
+
+    try std.testing.expectEqual(@as(u32, 0x4700), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 0x1FF8), m68k.a[7]); // switched to ISP
+    try std.testing.expectEqual(@as(u32, 0x3000), m68k.getStackRegister(.Master)); // MSP preserved
+    try std.testing.expect((m68k.sr & M68k.FLAG_S) != 0);
+    try std.testing.expect((m68k.sr & M68k.FLAG_M) == 0);
+
+    _ = try m68k.step(); // RTE
+
+    try std.testing.expectEqual(@as(u32, 0x0100), m68k.pc);
+    try std.testing.expect((m68k.sr & M68k.FLAG_S) != 0);
+    try std.testing.expect((m68k.sr & M68k.FLAG_M) != 0); // back to master
+    try std.testing.expectEqual(@as(u32, 0x3000), m68k.a[7]); // MSP restored
+    try std.testing.expectEqual(@as(u32, 0x2000), m68k.getStackRegister(.Interrupt)); // ISP frame consumed
 }
 
 test "M68k Line-F opcode enters coprocessor unavailable exception" {
@@ -1365,9 +1756,11 @@ test "M68k odd instruction fetch raises address error vector 3" {
     _ = try m68k.step();
 
     try std.testing.expectEqual(@as(u32, 0x5BE0), m68k.pc);
-    try std.testing.expectEqual(@as(u32, 0x3A78), m68k.a[7]);
-    try std.testing.expectEqual(@as(u16, 3 * 4), try m68k.memory.read16(0x3A7E));
-    try std.testing.expectEqual(@as(u32, 0x1801), try m68k.memory.read32(0x3A7A));
+    try std.testing.expectEqual(@as(u32, 0x3A68), m68k.a[7]); // format A (24-byte)
+    try std.testing.expectEqual(@as(u16, 0xA00C), try m68k.memory.read16(0x3A6E)); // vector 3
+    try std.testing.expectEqual(@as(u32, 0x1801), try m68k.memory.read32(0x3A6A)); // return PC
+    try std.testing.expectEqual(@as(u32, 0x1801), try m68k.memory.read32(0x3A70)); // fault address
+    try std.testing.expectEqual(@as(u16, 0xD000), try m68k.memory.read16(0x3A74)); // FC=supervisor program read
 }
 
 test "M68k misaligned data word access raises address error vector 3" {
@@ -1385,9 +1778,11 @@ test "M68k misaligned data word access raises address error vector 3" {
     _ = try m68k.step();
 
     try std.testing.expectEqual(@as(u32, 0x5C20), m68k.pc);
-    try std.testing.expectEqual(@as(u32, 0x3AB8), m68k.a[7]);
-    try std.testing.expectEqual(@as(u16, 3 * 4), try m68k.memory.read16(0x3ABE));
-    try std.testing.expectEqual(@as(u32, 0x1820), try m68k.memory.read32(0x3ABA));
+    try std.testing.expectEqual(@as(u32, 0x3AA8), m68k.a[7]); // format A (24-byte)
+    try std.testing.expectEqual(@as(u16, 0xA00C), try m68k.memory.read16(0x3AAE)); // vector 3
+    try std.testing.expectEqual(@as(u32, 0x1820), try m68k.memory.read32(0x3AAA)); // return PC
+    try std.testing.expectEqual(@as(u32, 0x2001), try m68k.memory.read32(0x3AB0)); // precise misaligned data address
+    try std.testing.expectEqual(@as(u16, 0x0800), try m68k.memory.read16(0x3AB4)); // FC from DFC(default 0), data write
 }
 
 test "M68k ILLEGAL opcode 0x4AFC enters illegal instruction exception" {

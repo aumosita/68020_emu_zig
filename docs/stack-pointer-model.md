@@ -141,25 +141,45 @@ ORI #$2000, SR     ; S=1, M=0 재확인 → setSR 호출로 A7 동기화
 
 ### 필수 테스트 케이스
 
-- [ ] User → ISP 전환 (예외 진입)
-- [ ] ISP → User 전환 (RTE)
-- [ ] User → MSP 전환 (이론적 케이스)
-- [ ] MSP → User 전환 (RTE)
-- [ ] MSP → ISP 전환 (예외 진입)
-- [ ] ISP → MSP 전환 (모드 전환)
-- [ ] MSP → ISP → MSP 복귀 (중첩 예외)
-- [ ] ISP → ISP 중첩 (인터럽트 중첩)
-- [ ] MOVE USP 사용 후 User 복귀 일관성
-- [ ] MOVEC ISP/MSP 후 A7 불일치 검출
-- [ ] 인터럽트 진입 시 활성 스택 전환 검증
-- [ ] RTE 복귀 시 모든 스택 레지스터 복원 검증
+- [x] User → ISP 전환 (예외 진입)  
+  - `src/cpu.zig` `test "M68k IRQ from user mode uses ISP and RTE restores USP"`
+- [x] ISP → User 전환 (RTE)  
+  - `src/cpu.zig` `test "M68k IRQ from user mode uses ISP and RTE restores USP"`
+- [x] User → MSP 전환 (이론적 케이스)  
+  - `src/cpu.zig` `test "M68k setSR stack transition matrix preserves banked pointers"`
+- [x] MSP → User 전환 (RTE)  
+  - `src/cpu.zig` `test "M68k setSR stack transition matrix preserves banked pointers"`
+- [x] MSP → ISP 전환 (예외 진입)  
+  - `src/cpu.zig` `test "M68k exception from master stack uses ISP and RTE restores MSP"`  
+  - `src/cpu.zig` `test "M68k IRQ from master mode switches to ISP and RTE restores MSP"`
+- [x] ISP → MSP 전환 (모드 전환)  
+  - `src/cpu.zig` `test "M68k setSR stack transition matrix preserves banked pointers"`
+- [x] MSP → ISP → MSP 복귀 (중첩 예외)  
+  - `src/cpu.zig` `test "M68k exception from master stack uses ISP and RTE restores MSP"`
+- [x] ISP → ISP 중첩 (인터럽트 중첩)  
+  - `src/cpu.zig` `test "M68k nested IRQ frames stay on ISP and unwind with RTE"`
+- [x] MOVE USP 사용 후 User 복귀 일관성  
+  - `src/cpu.zig` `test "M68k MOVE USP transfers and user restore consistency"`
+- [x] MOVEC ISP/MSP 후 A7 불일치 검출  
+  - `src/cpu.zig` `test "M68k MOVEC stack registers do not force active A7 sync"`
+- [x] 인터럽트 진입 시 활성 스택 전환 검증  
+  - `src/cpu.zig` `test "M68k IRQ from user mode uses ISP and RTE restores USP"`  
+  - `src/cpu.zig` `test "M68k IRQ from master mode switches to ISP and RTE restores MSP"`
+- [x] RTE 복귀 시 모든 스택 레지스터 복원 검증  
+  - `src/cpu.zig` `test "M68k setSR stack transition matrix preserves banked pointers"`  
+  - `src/cpu.zig` `test "M68k nested IRQ frames stay on ISP and unwind with RTE"`
 
 ### 엣지 케이스
 
-1. **제로 초기화 fallback**: `loadActiveStackPointer`에서 스택이 0이면 fallback 사용
-2. **reset() 동작**: ISP와 MSP 모두 초기 A7로 설정
-3. **STOP 상태에서 인터럽트**: STOP 중에도 스택 전환 정상 동작
-4. **Bus error 프레임 A**: 24바이트 프레임도 올바른 스택에 푸시
+- [x] **제로 초기화 fallback**: `loadActiveStackPointer`에서 스택이 0이면 fallback 사용  
+  - `src/cpu.zig` `test "M68k stack register fallback loads active A7 when target bank is zero"`
+- [x] **reset() 동작**: ISP와 MSP 모두 초기 A7로 설정  
+  - `src/cpu.zig` `test "M68k reset initializes ISP/MSP from reset vector stack pointer"`
+- [x] **STOP 상태에서 인터럽트**: STOP 중에도 스택 전환 정상 동작  
+  - `src/cpu.zig` `test "M68k STOP halts until interrupt and resumes on IRQ"`
+- [x] **Bus error 프레임 A**: 24바이트 프레임 생성 검증  
+  - `src/cpu.zig` `test "M68k bus error during instruction fetch creates format A frame"`  
+  - 스택 선택(USP/ISP/MSP 조합) 전용 회귀는 추가 가능
 
 ## 참고: Motorola 68020 매뉴얼
 
@@ -171,4 +191,4 @@ ORI #$2000, SR     ; S=1, M=0 재확인 → setSR 호출로 A7 동기화
 ---
 
 **작성일**: 2026-02-11  
-**상태**: 초안 (테스트 검증 필요)
+**상태**: 검증 완료 (체크리스트 기준)

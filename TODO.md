@@ -13,25 +13,47 @@
 - 경량 캐시/버스 추상화 완료:
   - `CACR` 기반 I-cache enable/invalidate 가시 효과
   - bus hook / address translator 연동 포인트 반영
+- 스택 포인터 모델 1차 검증 완료:
+  - `S/M` 전환 매트릭스 회귀 테스트 추가
+  - `MOVE USP` 구현 + 특권 위반(`vector 8`) 회귀 추가
+  - `MOVEC USP/ISP/MSP` raw register 동작(A7 비자동 동기화) 회귀 추가
+  - User/ISP/MSP 전환 + 중첩 IRQ + RTE 복귀 조합 회귀 추가
+  - `docs/stack-pointer-model.md` 체크리스트 검증 완료로 갱신
+- 예외 프레임 정확도 2차 보강 완료:
+  - vector 2/3를 Format A 프레임 정책으로 통일
+  - `fault address`, `access word`, `IR` 필드 기록 강화
+  - 디코더 확장 워드 fetch 실패 시 precise fault address 보존 회귀 추가
+- `root.zig` 외부 API 검증 확대 완료:
+  - `m68k_set_irq`, `m68k_set_irq_vector`, `m68k_set_spurious_irq` C API 통합 테스트 추가
+  - STOP 상태 인터럽트 재개 시 `cycle/PC/SR` 검증 추가
+  - `zig test src/root.zig` 기준 IRQ/STOP 관련 회귀 자동 검증
+- C API 에러 가시성/안전성 1차 보강 완료:
+  - status-code 기반 메모리 API(`*_memory_*_status`) 추가
+  - out-parameter 기반 read API로 실패 원인 식별 가능 경로 제공
+  - 전역 `gpa` 접근에 mutex 적용(create/destroy 경합 완화)
+  - context 기반 생성/파괴 API(`m68k_context_*`, `m68k_create_in_context`, `m68k_destroy_in_context`) 추가
+  - context allocator callback 주입 API(`m68k_context_set_allocator_callbacks`) 추가
+  - root API에서 out-of-range/alignment/null-pointer 실패 경로 회귀 추가
 
 ## 높은 우선순위
 
-- 스택 포인터 모델 세부 규칙 완성
-  - `S/M` 비트 전환 시 `USP/ISP/MSP` 저장/복원 규칙을 케이스별 표로 정리
-  - `MOVE USP`, `MOVEC USP/ISP/MSP` 혼합 사용 시 일관성 회귀 테스트 추가
-  - 인터럽트 진입/중첩 인터럽트/`RTE` 복귀에서 active stack 전환 검증 강화
-  - 완료 기준: supervisor/user, interrupt/master 전환 조합 테스트 통과
+- 스택 포인터 모델 세부 규칙 완성 ✅(완료)
+  - 후속 유지보수: 예외 프레임 정확도 보강 시 stack/frame 상호영향 회귀 유지
 
-- 예외 프레임 정확도 2차 보강
-  - 현재 Format A/B 생성 경로에서 누락된 상태 워드/내부 정보 필드 점검
-  - `Address Error` 프레임의 `fault address`, `IR`, `access type` 기록 정책 결정
-  - 디코더 확장 워드 fetch 실패 시 faulting address 보존 규칙 통일
-  - 완료 기준: vector 2/3 프레임 필드 검증 테스트 추가 후 통과
+- 예외 프레임 정확도 2차 보강 ✅(완료)
+  - 후속 유지보수: Format B 및 드문 fault subtype 세분 필드 검증 확장
 
-- `root.zig` 외부 API 검증 확대
-  - `m68k_set_irq`, `m68k_set_irq_vector`, `m68k_set_spurious_irq` 경로를 C API 기준으로 통합 테스트
-  - STOP 상태에서 인터럽트 재개 시 cycle/PC/SR 기대값 검증
-  - 완료 기준: root API 테스트에서 IRQ 관련 시나리오 전부 자동 검증
+- `root.zig` 외부 API 검증 확대 ✅(완료)
+  - 후속 유지보수: C API 에러 코드형 ABI(v2) 추가 시 동일 시나리오를 새 API로 병행 검증
+
+- C API 에러 가시성/안전성 강화 ✅(완료)
+  - ✅ status code + out-parameter 기반 메모리 접근 API 추가(`*_status`)
+  - ✅ 버스/정렬/인자 오류를 반환 코드로 노출하는 회귀 테스트 추가
+  - ✅ 전역 `gpa` create/destroy 경로 mutex 보호
+  - ✅ context 주입 생성/파괴 API 추가(allocator 도메인 분리)
+  - ✅ 구 API(`m68k_read/write_memory_*`) deprecate/권장 경로 README 문서화
+  - ✅ 외부 allocator callback 주입 API 추가
+  - 후속(선택): 구 API 제거 시기/버전 정책 확정
 
 - 불법 인코딩/확장 워드 예외 커버리지 확장
   - `CALLM/RTM`, bitfield, `MOVEC`, coprocessor/line-A/F의 경계 인코딩 추가
@@ -61,6 +83,18 @@
   - `retry/halt/bus_error` 시 재시도/정지/예외 진입 규칙 명확화
   - 완료 기준: bus hook 시나리오별 step 동작 회귀 테스트
 
+- Dynamic Bus Sizing(8/16/32-bit 포트) 모델 도입
+  - 메모리 영역별 port width 속성 정의
+  - 32-bit 접근의 분할 버스 사이클(예: 8-bit 포트에서 4회 접근) 모델링
+  - 기능 정확도와 독립적으로 cycle 비용 계산 경로 분리
+  - 완료 기준: 포트 폭별 read/write 분할 회귀 + cycle 기대값 테스트
+
+- I-Cache 구조 고증 정합성 보강(68020 256B)
+  - line 데이터 폭을 longword 중심으로 재정의(64 entries x 4 bytes)
+  - fetch/fill 로직을 32-bit 정렬 기반으로 조정
+  - 기존 경량 모델과 호환되는 옵션/마이그레이션 정책 유지
+  - 완료 기준: cache hit/miss/invalidate 회귀 + 용량/정렬 정책 문서화
+
 ## 낮은 우선순위
 
 - PMMU-ready 확장 준비
@@ -71,9 +105,20 @@
 - 캐시/파이프라인 옵션 고도화(비기본)
   - 현재 I-cache 경량 모델의 통계(hit/miss 카운터) 노출
   - 필요 시 fetch penalty를 옵션 값으로 조정 가능하게 확장
+  - 파이프라인(full detail) 모델은 범위가 커서 보류, 필요 시 단계형(`off/approx/detailed`) 옵션으로 별도 트랙 진행
   - 완료 기준: 기능 플래그 + 문서화
+
+- 플랫폼 주변장치/PIC 레이어 준비
+  - CPU 외부 모듈로 PIC(priority encoder), timer tick, 최소 UART 스텁 설계
+  - 코어와 플랫폼 경계(IRQ 주입/ack/vector 계약) 문서화
+  - 완료 기준: 샘플 플랫폼 루프에서 주기 IRQ/핸들러 왕복 데모 동작
 
 - 벤치마크/품질 측정
   - 대표 워크로드 3개 기준 회귀 성능 측정 스크립트 준비
   - CPI/MIPS는 참고 지표로만 보고, 기능 회귀를 우선 게이트로 유지
   - 완료 기준: 재현 가능한 벤치 실행 절차 문서화
+
+- 외부 검증 스위트 연동
+  - 외부 68k validation vectors(JSON/바이너리)를 로드하는 테스트 러너 추가
+  - 희소 인코딩(bitfield/packed decimal/exception return PC) 중심 우선 연동
+  - 완료 기준: CI에서 외부 벡터 subset 자동 실행
