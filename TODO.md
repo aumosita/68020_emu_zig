@@ -82,12 +82,10 @@
   - ✅ coprocessor handler 계약(입력 opcode/PC, 반환 semantics) 문서화(`docs/coprocessor-handler.md`)
   - ✅ 핸들러 부재/거부/fault 반환의 표준 동작 고정 + 회귀 테스트 반영
 
-- 버스 추상화 고도화
-  - 진행: FC 기반 접근 정책(사용자/슈퍼바이저 + 프로그램/데이터) CPU fetch 경로 회귀 테스트 강화
-  - 진행: `retry/halt` 시 CPU step의 재시도/정지/IRQ 재개 규칙 회귀 테스트 추가
-  - 잔여: data access 경로(bus hook/translator)까지 FC 정책 검증 범위 확장
-  - 잔여: `bus_error` 시나리오를 bus hook 기반 실행 경로와 일관되게 통합 검증
-  - 완료 기준: bus hook 시나리오별 step 동작 회귀 테스트
+- 버스 추상화 고도화 ✅(완료)
+  - ✅ FC 기반 접근 정책(사용자/슈퍼바이저 + 프로그램/데이터) CPU fetch/data 경로 회귀 테스트 강화
+  - ✅ `retry/halt/bus_error` 시 CPU step의 재시도/정지/예외 진입 규칙 회귀 테스트 추가
+  - ✅ data access 경로를 bus hook/translator 경로와 통합(`read/write*Bus`)하고 회귀 검증 반영
 
 - Dynamic Bus Sizing(8/16/32-bit 포트) 모델 도입
   - 메모리 영역별 port width 속성 정의

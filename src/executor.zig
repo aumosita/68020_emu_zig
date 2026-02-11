@@ -1,6 +1,7 @@
 const std = @import("std");
 const cpu = @import("cpu.zig");
 const decoder = @import("decoder.zig");
+const memory = @import("memory.zig");
 
 pub const Executor = struct {
     pub fn init() Executor { return .{}; }
@@ -1038,12 +1039,17 @@ fn getOperandValue(m: *cpu.M68k, op: decoder.Operand, s: decoder.DataSize) !u32 
     const readMem = struct {
         fn run(mm: *cpu.M68k, addr: u32, sz: decoder.DataSize) !u32 {
             mm.noteDataAccess(addr, false);
+            const access = memory.BusAccess{
+                .function_code = mm.dfc,
+                .space = .Data,
+                .is_write = false,
+            };
             return if (sz == .Byte)
-                try mm.memory.read8(addr)
+                try mm.memory.read8Bus(addr, access)
             else if (sz == .Word)
-                try mm.memory.read16(addr)
+                try mm.memory.read16Bus(addr, access)
             else
-                try mm.memory.read32(addr);
+                try mm.memory.read32Bus(addr, access);
         }
     }.run;
     return switch (op) {
@@ -1064,12 +1070,17 @@ fn setOperandValue(m: *cpu.M68k, op: decoder.Operand, v: u32, s: decoder.DataSiz
     const writeMem = struct {
         fn run(mm: *cpu.M68k, addr: u32, value: u32, sz: decoder.DataSize) !void {
             mm.noteDataAccess(addr, true);
+            const access = memory.BusAccess{
+                .function_code = mm.dfc,
+                .space = .Data,
+                .is_write = true,
+            };
             if (sz == .Byte)
-                try mm.memory.write8(addr, @truncate(value))
+                try mm.memory.write8Bus(addr, @truncate(value), access)
             else if (sz == .Word)
-                try mm.memory.write16(addr, @truncate(value))
+                try mm.memory.write16Bus(addr, @truncate(value), access)
             else
-                try mm.memory.write32(addr, value);
+                try mm.memory.write32Bus(addr, value, access);
         }
     }.run;
     switch (op) {

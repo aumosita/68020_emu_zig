@@ -204,6 +204,25 @@ pub const M68k = struct {
         self.last_data_access_addr = self.pc;
         self.last_data_access_is_write = false;
         const cycles_used = self.executor.execute(self, &instruction) catch |err| switch (err) {
+            error.BusRetry => {
+                self.cycles += 4 + fetch.penalty_cycles;
+                return 4 + fetch.penalty_cycles;
+            },
+            error.BusHalt => {
+                self.stopped = true;
+                self.cycles += 4 + fetch.penalty_cycles;
+                return 4 + fetch.penalty_cycles;
+            },
+            error.BusError => {
+                try self.enterBusErrorFrameA(self.pc, self.last_data_access_addr, .{
+                    .function_code = self.dfc,
+                    .space = .Data,
+                    .is_write = self.last_data_access_is_write,
+                });
+                const cycles = faultCycles(.execute_data_access) + fetch.penalty_cycles;
+                self.cycles += cycles;
+                return cycles;
+            },
             error.InvalidAddress => {
                 try self.enterBusErrorFrameA(self.pc, self.last_data_access_addr, .{
                     .function_code = self.dfc,
@@ -626,6 +645,11 @@ fn busHookTestHandler(ctx: ?*anyopaque, logical_addr: u32, access: memory.BusAcc
         .bus_error_on_data_write => if (access.space == .Data and access.is_write) .bus_error else .ok,
         .capture_program_fetch => .ok,
     };
+}
+
+fn dataAccessAddTranslator(_: ?*anyopaque, logical_addr: u32, access: memory.BusAccess) !u32 {
+    if (access.space == .Data) return logical_addr + 0x1000;
+    return logical_addr;
 }
 
 fn bkptTestHandler(ctx: ?*anyopaque, m68k: *M68k, vector: u3, _: u32) M68k.BkptResult {
@@ -2498,6 +2522,63 @@ test "M68k bus hook observes program fetch FC for user and supervisor modes" {
     try std.testing.expectEqual(@as(u3, 0b110), ctx.last_access.function_code);
     try std.testing.expectEqual(memory.AccessSpace.Program, ctx.last_access.space);
     try std.testing.expect(!ctx.last_access.is_write);
+}
+
+test "M68k bus hook data-write error enters vector 2 with DFC in format A access word" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    var ctx = BusHookTestContext{ .mode = .bus_error_on_data_write };
+    m68k.memory.setBusHook(busHookTestHandler, &ctx);
+
+    try m68k.memory.write32(m68k.getExceptionVector(2), 0x9400);
+    try m68k.memory.write16(0x8C00, 0x3080); // MOVE.W D0,(A0)
+
+    m68k.pc = 0x8C00;
+    m68k.a[0] = 0x2400;
+    m68k.a[7] = 0x5200;
+    m68k.setSR(0x2000);
+    m68k.d[0] = 0x00001234;
+    m68k.dfc = 0b101;
+
+    const cycles = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 54), cycles);
+    try std.testing.expectEqual(@as(u32, 0x9400), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 0x51E8), m68k.a[7]);
+    try std.testing.expectEqual(@as(u16, 0xA008), try m68k.memory.read16(0x51EE)); // vector 2 format A
+    try std.testing.expectEqual(@as(u32, 0x2400), try m68k.memory.read32(0x51F0)); // precise fault address
+    try std.testing.expectEqual(@as(u16, 0xA800), try m68k.memory.read16(0x51F4)); // FC=5, data write
+    try std.testing.expect(ctx.saw_data_write);
+    try std.testing.expectEqual(@as(u3, 0b101), ctx.last_access.function_code);
+    try std.testing.expectEqual(memory.AccessSpace.Data, ctx.last_access.space);
+    try std.testing.expect(ctx.last_access.is_write);
+}
+
+test "M68k data access translator remaps execute write while preserving logical bus address observation" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    var ctx = BusHookTestContext{ .mode = .pass_through };
+    m68k.memory.setBusHook(busHookTestHandler, &ctx);
+    m68k.memory.setAddressTranslator(dataAccessAddTranslator, null);
+
+    try m68k.memory.write16(0x8D00, 0x3080); // MOVE.W D0,(A0)
+    m68k.pc = 0x8D00;
+    m68k.a[0] = 0x0300; // logical data address, translated to 0x1300
+    m68k.d[0] = 0x00001234;
+    m68k.setSR(0x2000);
+    m68k.dfc = 0b011;
+
+    try std.testing.expectEqual(@as(u32, 6), try m68k.step());
+    try std.testing.expectEqual(@as(u16, 0x1234), try m68k.memory.read16(0x1300)); // translated target
+    try std.testing.expectEqual(@as(u16, 0x0000), try m68k.memory.read16(0x0300)); // logical location unchanged
+    try std.testing.expect(ctx.saw_data_write);
+    try std.testing.expectEqual(@as(u32, 0x0300), ctx.last_addr); // hook sees logical address
+    try std.testing.expectEqual(@as(u3, 0b011), ctx.last_access.function_code);
+    try std.testing.expectEqual(memory.AccessSpace.Data, ctx.last_access.space);
+    try std.testing.expect(ctx.last_access.is_write);
 }
 
 test "M68k STOP and RESET privilege violation in user mode" {
