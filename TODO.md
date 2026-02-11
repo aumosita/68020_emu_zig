@@ -70,6 +70,7 @@
   - 진행: `MOVEM` 비용 모델/회귀 반영 완료, 분기/bitfield 사이즈·오퍼랜드별 사이클 정밀화 반영 완료
   - 진행: 분기(`BRA/Bcc`) 변위 크기별 taken/not-taken 비용 반영 + 회귀 테스트 추가
   - 진행: bitfield 명령의 reg/mem 오퍼랜드별 비용 반영 + 회귀 테스트 추가
+  - 진행: 예외/트랩 경로(Illegal/LineA/LineF/BKPT/AddressError/Privilege) cycle assertion 회귀 확장
   - 잔여: 예외(fault subtype) cycle 세분화
   - 잔여: 핵심 명령 cycle 회귀 테스트 범위 확장
 

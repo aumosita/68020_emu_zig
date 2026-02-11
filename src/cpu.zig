@@ -1263,9 +1263,10 @@ test "M68k RTE privilege violation in user mode" {
     m68k.a[7] = 0x3400;
     m68k.setSR(0x0000); // user mode
 
-    _ = try m68k.step();
+    const cycles = try m68k.step();
 
     try std.testing.expectEqual(@as(u32, 0x5A00), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 34), cycles);
     try std.testing.expectEqual(@as(u32, 0x33F8), m68k.a[7]);
     try std.testing.expectEqual(@as(u16, 0x0000), try m68k.memory.read16(0x33F8));
     try std.testing.expectEqual(@as(u32, 0x1100), try m68k.memory.read32(0x33FA));
@@ -1688,8 +1689,9 @@ test "M68k coprocessor handler may defer to unavailable vector 11" {
     m68k.a[7] = 0x3700;
     m68k.setSR(0x0000);
 
-    _ = try m68k.step();
+    const cycles = try m68k.step();
     try std.testing.expect(ctx.called);
+    try std.testing.expectEqual(@as(u32, 34), cycles);
     try std.testing.expectEqual(@as(u32, 0x5A80), m68k.pc);
 }
 
@@ -1705,9 +1707,10 @@ test "M68k UNKNOWN opcode enters illegal instruction exception" {
     m68k.a[7] = 0x3800;
     m68k.setSR(0x0000); // user mode
 
-    _ = try m68k.step();
+    const cycles = try m68k.step();
 
     try std.testing.expectEqual(@as(u32, 0x5B00), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 34), cycles);
     try std.testing.expectEqual(@as(u16, 4 * 4), try m68k.memory.read16(0x37FE));
     try std.testing.expectEqual(@as(u32, 0x1600), try m68k.memory.read32(0x37FA));
 }
@@ -1724,9 +1727,10 @@ test "M68k Line-A opcode enters line-1010 emulator exception" {
     m68k.a[7] = 0x3880;
     m68k.setSR(0x0000); // user mode
 
-    _ = try m68k.step();
+    const cycles = try m68k.step();
 
     try std.testing.expectEqual(@as(u32, 0x5B80), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 34), cycles);
     try std.testing.expectEqual(@as(u32, 0x3878), m68k.a[7]);
     try std.testing.expectEqual(@as(u16, 10 * 4), try m68k.memory.read16(0x387E));
     try std.testing.expectEqual(@as(u32, 0x1680), try m68k.memory.read32(0x387A));
@@ -1773,9 +1777,10 @@ test "M68k BKPT traps through illegal instruction vector when no debugger is att
     m68k.a[7] = 0x38C0;
     m68k.setSR(0x2000); // supervisor mode
 
-    _ = try m68k.step();
+    const cycles = try m68k.step();
 
     try std.testing.expectEqual(@as(u32, 0x5BC0), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 10), cycles);
     try std.testing.expectEqual(@as(u32, 0x38B8), m68k.a[7]);
     try std.testing.expectEqual(@as(u16, 0x2000), try m68k.memory.read16(0x38B8)); // stacked SR
     try std.testing.expectEqual(@as(u32, 0x16C0), try m68k.memory.read32(0x38BA)); // offending PC
@@ -1814,9 +1819,10 @@ test "M68k odd instruction fetch raises address error vector 3" {
     m68k.a[7] = 0x3A80;
     m68k.setSR(0x2000);
 
-    _ = try m68k.step();
+    const cycles = try m68k.step();
 
     try std.testing.expectEqual(@as(u32, 0x5BE0), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 50), cycles);
     try std.testing.expectEqual(@as(u32, 0x3A68), m68k.a[7]); // format A (24-byte)
     try std.testing.expectEqual(@as(u16, 0xA00C), try m68k.memory.read16(0x3A6E)); // vector 3
     try std.testing.expectEqual(@as(u32, 0x1801), try m68k.memory.read32(0x3A6A)); // return PC
@@ -1836,9 +1842,10 @@ test "M68k misaligned data word access raises address error vector 3" {
     m68k.a[7] = 0x3AC0;
     m68k.setSR(0x2000);
 
-    _ = try m68k.step();
+    const cycles = try m68k.step();
 
     try std.testing.expectEqual(@as(u32, 0x5C20), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 50), cycles);
     try std.testing.expectEqual(@as(u32, 0x3AA8), m68k.a[7]); // format A (24-byte)
     try std.testing.expectEqual(@as(u16, 0xA00C), try m68k.memory.read16(0x3AAE)); // vector 3
     try std.testing.expectEqual(@as(u32, 0x1820), try m68k.memory.read32(0x3AAA)); // return PC
@@ -1858,9 +1865,10 @@ test "M68k ILLEGAL opcode 0x4AFC enters illegal instruction exception" {
     m68k.a[7] = 0x3900;
     m68k.setSR(0x0000); // user mode
 
-    _ = try m68k.step();
+    const cycles = try m68k.step();
 
     try std.testing.expectEqual(@as(u32, 0x5C00), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 34), cycles);
     try std.testing.expectEqual(@as(u16, 4 * 4), try m68k.memory.read16(0x38FE));
     try std.testing.expectEqual(@as(u32, 0x1700), try m68k.memory.read32(0x38FA));
 }
@@ -1877,9 +1885,10 @@ test "M68k unmatched group-4 opcode does not silently execute as NOP" {
     m68k.a[7] = 0x3A00;
     m68k.setSR(0x0000); // user mode
 
-    _ = try m68k.step();
+    const cycles = try m68k.step();
 
     try std.testing.expectEqual(@as(u32, 0x5D00), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 34), cycles);
     try std.testing.expectEqual(@as(u16, 4 * 4), try m68k.memory.read16(0x39FE));
     try std.testing.expectEqual(@as(u32, 0x1710), try m68k.memory.read32(0x39FA));
 }
@@ -2258,8 +2267,9 @@ test "M68k STOP and RESET privilege violation in user mode" {
     m68k.pc = 0xA100;
     m68k.a[7] = 0x4300;
     m68k.setSR(0x0000);
-    _ = try m68k.step();
+    const stop_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0xA000), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 34), stop_cycles);
     try std.testing.expectEqual(@as(u16, 8 * 4), try m68k.memory.read16(0x42FE));
     try std.testing.expectEqual(@as(u32, 0xA100), try m68k.memory.read32(0x42FA));
 
@@ -2268,8 +2278,9 @@ test "M68k STOP and RESET privilege violation in user mode" {
     m68k.pc = 0xA200;
     m68k.a[7] = 0x4400;
     m68k.setSR(0x0000);
-    _ = try m68k.step();
+    const reset_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0xA000), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 34), reset_cycles);
     try std.testing.expectEqual(@as(u16, 8 * 4), try m68k.memory.read16(0x43FE));
     try std.testing.expectEqual(@as(u32, 0xA200), try m68k.memory.read32(0x43FA));
 }
