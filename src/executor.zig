@@ -108,7 +108,7 @@ pub const Executor = struct {
 fn executeMoveq(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const r = switch (i.dst) { .DataReg => |v| v, else => return error.Err };
     const v: i8 = switch (i.src) { .Immediate8 => |w| @bitCast(w), else => 0 };
-    m.d[r] = @bitCast(@as(i32, v)); m.setFlags(m.d[r], .Long); m.pc += 2; return 4;
+    m.d[r] = @bitCast(@as(i32, v)); m.setFlags(m.d[r], .Long); m.pc += i.size; return 4;
 }
 fn executeMove(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const v = try getOperandValue(m, i.src, i.data_size);
@@ -149,7 +149,7 @@ fn executeAddq(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
 }
 fn executeAddx(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const x: u32 = if (m.getFlag(cpu.M68k.FLAG_X)) 1 else 0; const s = try getOperandValue(m, i.src, i.data_size); const d = try getOperandValue(m, i.dst, i.data_size); const res = d +% s +% x;
-    try setOperandValue(m, i.dst, res, i.data_size); setArithmeticFlags(m, d, s +% x, res, i.data_size, false); m.pc += 2; return 4;
+    try setOperandValue(m, i.dst, res, i.data_size); setArithmeticFlags(m, d, s +% x, res, i.data_size, false); m.pc += i.size; return 4;
 }
 fn executeSub(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const dir = (i.opcode >> 8) & 1;
@@ -171,7 +171,7 @@ fn executeSubq(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
 }
 fn executeSubx(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const x: u32 = if (m.getFlag(cpu.M68k.FLAG_X)) 1 else 0; const s = try getOperandValue(m, i.src, i.data_size); const d = try getOperandValue(m, i.dst, i.data_size); const res = d -% s -% x;
-    try setOperandValue(m, i.dst, res, i.data_size); setArithmeticFlags(m, d, s +% x, res, i.data_size, true); m.pc += 2; return 4;
+    try setOperandValue(m, i.dst, res, i.data_size); setArithmeticFlags(m, d, s +% x, res, i.data_size, true); m.pc += i.size; return 4;
 }
 fn executeCmp(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const r = switch (i.dst) { .DataReg => |v| v, else => 0 }; const s = try getOperandValue(m, i.src, i.data_size); const d = getRegisterValue(m.d[r], i.data_size); setArithmeticFlags(m, d, s, d -% s, i.data_size, true);
@@ -188,7 +188,7 @@ fn executeCmpi(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
 fn executeCmpm(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const ay: u3 = @truncate(i.opcode & 7); const ax: u3 = @truncate((i.opcode >> 9) & 7);
     const s = try getOperandValue(m, .{ .AddrPostInc = ay }, i.data_size); const d = try getOperandValue(m, .{ .AddrPostInc = ax }, i.data_size);
-    setArithmeticFlags(m, d, s, d -% s, i.data_size, true); m.pc += 2; return 12;
+    setArithmeticFlags(m, d, s, d -% s, i.data_size, true); m.pc += i.size; return 12;
 }
 fn executeAnd(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const dir = (i.opcode >> 8) & 1;
@@ -286,12 +286,12 @@ fn executeNeg(m: *cpu.M68k, i: *const decoder.Instruction) !u32 { const d = try 
 fn executeNegx(m: *cpu.M68k, i: *const decoder.Instruction) !u32 { const x: u32 = if (m.getFlag(cpu.M68k.FLAG_X)) 1 else 0; const d = try getOperandValue(m, i.dst, i.data_size); const res = 0 -% d -% x; try setOperandValue(m, i.dst, res, i.data_size); setArithmeticFlags(m, 0, d +% x, res, i.data_size, true); m.pc += i.size; return 4; }
 fn executeClr(m: *cpu.M68k, i: *const decoder.Instruction) !u32 { try setOperandValue(m, i.dst, 0, i.data_size); m.setFlags(0, i.data_size); m.pc += i.size; return 4; }
 fn executeTst(m: *cpu.M68k, i: *const decoder.Instruction) !u32 { const v = try getOperandValue(m, i.dst, i.data_size); m.setFlags(v, i.data_size); m.pc += i.size; return 4; }
-fn executeSwap(m: *cpu.M68k, i: *const decoder.Instruction) !u32 { const r = switch (i.dst) { .DataReg => |v| v, else => 0 }; const low = m.d[r] & 0xFFFF; const high = m.d[r] >> 16; m.d[r] = (low << 16) | high; m.setFlags(m.d[r], .Long); m.pc += 2; return 4; }
+fn executeSwap(m: *cpu.M68k, i: *const decoder.Instruction) !u32 { const r = switch (i.dst) { .DataReg => |v| v, else => 0 }; const low = m.d[r] & 0xFFFF; const high = m.d[r] >> 16; m.d[r] = (low << 16) | high; m.setFlags(m.d[r], .Long); m.pc += i.size; return 4; }
 fn executeExt(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const r = switch (i.dst) { .DataReg => |v| v, else => 0 }; if (i.is_extb) { m.d[r] = @bitCast(@as(i32, @as(i8, @bitCast(@as(u8, @truncate(m.d[r])))))); }
     else if (i.data_size == .Word) { const ext_val = @as(i16, @as(i8, @bitCast(@as(u8, @truncate(m.d[r]))))); m.d[r] = (m.d[r] & 0xFFFF0000) | (@as(u32, @bitCast(@as(i32, ext_val))) & 0xFFFF); }
     else { m.d[r] = @bitCast(@as(i32, @as(i16, @bitCast(@as(u16, @truncate(m.d[r])))))); }
-    m.setFlags(m.d[r], .Long); m.pc += 2; return 4;
+    m.setFlags(m.d[r], .Long); m.pc += i.size; return 4;
 }
 fn executeLea(m: *cpu.M68k, i: *const decoder.Instruction) !u32 { const r = switch (i.dst) { .AddrReg => |v| v, else => 0 }; m.a[r] = try calculateEA(m, i.src); m.pc += i.size; return 4; }
 fn executeRts(m: *cpu.M68k) !u32 { m.pc = try m.memory.read32(m.a[7]); m.a[7] += 4; return 16; }
@@ -465,7 +465,7 @@ fn executeMovec(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     m.pc += 4; return 12;
 }
 fn executeLink(m: *cpu.M68k, i: *const decoder.Instruction) !u32 { const r = switch (i.dst) { .AddrReg => |v| v, else => 7 }; const d: i16 = @bitCast(switch (i.src) { .Immediate16 => |v| v, else => 0 }); m.a[7] -= 4; try m.memory.write32(m.a[7], m.a[r]); m.a[r] = m.a[7]; m.a[7] = @bitCast(@as(i32, @bitCast(m.a[7])) + @as(i32, d)); m.pc += 4; return 16; }
-fn executeUnlk(m: *cpu.M68k, i: *const decoder.Instruction) !u32 { const r = switch (i.dst) { .AddrReg => |v| v, else => 7 }; m.a[7] = m.a[r]; m.a[r] = try m.memory.read32(m.a[7]); m.a[7] += 4; m.pc += 2; return 12; }
+fn executeUnlk(m: *cpu.M68k, i: *const decoder.Instruction) !u32 { const r = switch (i.dst) { .AddrReg => |v| v, else => 7 }; m.a[7] = m.a[r]; m.a[r] = try m.memory.read32(m.a[7]); m.a[7] += 4; m.pc += i.size; return 12; }
 fn executePea(m: *cpu.M68k, i: *const decoder.Instruction) !u32 { const a = try calculateEA(m, i.src); m.a[7] -= 4; try m.memory.write32(m.a[7], a); m.pc += i.size; return 12; }
 fn executeMovem(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const mask = switch (i.src) { .Immediate16 => |v| v, else => 0 };
@@ -541,7 +541,7 @@ fn executeMovem(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     m.pc += i.size;
     return 8;
 }
-fn executeExg(m: *cpu.M68k, i: *const decoder.Instruction) !u32 { const rx = (i.opcode >> 9) & 7; const ry = i.opcode & 7; const mode = (i.opcode >> 3) & 0x1F; if (mode == 8) { const tmp = m.d[rx]; m.d[rx] = m.d[ry]; m.d[ry] = tmp; } else if (mode == 9) { const tmp = m.a[rx]; m.a[rx] = m.a[ry]; m.a[ry] = tmp; } else { const tmp = m.d[rx]; m.d[rx] = m.a[ry]; m.a[ry] = tmp; } m.pc += 2; return 6; }
+fn executeExg(m: *cpu.M68k, i: *const decoder.Instruction) !u32 { const rx = (i.opcode >> 9) & 7; const ry = i.opcode & 7; const mode = (i.opcode >> 3) & 0x1F; if (mode == 8) { const tmp = m.d[rx]; m.d[rx] = m.d[ry]; m.d[ry] = tmp; } else if (mode == 9) { const tmp = m.a[rx]; m.a[rx] = m.a[ry]; m.a[ry] = tmp; } else { const tmp = m.d[rx]; m.d[rx] = m.a[ry]; m.a[ry] = tmp; } m.pc += i.size; return 6; }
 fn executeChk(m: *cpu.M68k, i: *const decoder.Instruction) !u32 { const r = switch (i.dst) { .DataReg => |v| v, else => 0 }; const b = try getOperandValue(m, i.src, .Word); const v = m.d[r] & 0xFFFF; if (v > b or (v & 0x8000) != 0) { try m.enterException(6, m.pc + i.size, 0, null); return 44; } m.pc += i.size; return 10; }
 fn executeTas(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const v = try getOperandValue(m, i.dst, .Byte);
@@ -550,9 +550,9 @@ fn executeTas(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     m.pc += i.size;
     return if (isMem(i.dst)) 14 else 4;
 }
-fn executeAbcd(m: *cpu.M68k, i: *const decoder.Instruction) !u32 { const s = try getOperandValue(m, i.src, .Byte); const d = try getOperandValue(m, i.dst, .Byte); const res = addBcd(@truncate(d), @truncate(s), m.getFlag(cpu.M68k.FLAG_X)); try setOperandValue(m, i.dst, res.result, .Byte); m.setFlag(cpu.M68k.FLAG_X, res.carry); m.setFlag(cpu.M68k.FLAG_C, res.carry); if (res.result != 0) { m.setFlag(cpu.M68k.FLAG_Z, false); } m.pc += 2; return 6; }
-fn executeSbcd(m: *cpu.M68k, i: *const decoder.Instruction) !u32 { const s = try getOperandValue(m, i.src, .Byte); const d = try getOperandValue(m, i.dst, .Byte); const res = subBcd(@truncate(d), @truncate(s), m.getFlag(cpu.M68k.FLAG_X)); try setOperandValue(m, i.dst, res.result, .Byte); m.setFlag(cpu.M68k.FLAG_X, res.carry); m.setFlag(cpu.M68k.FLAG_C, res.carry); if (res.result != 0) { m.setFlag(cpu.M68k.FLAG_Z, false); } m.pc += 2; return 6; }
-fn executeNbcd(m: *cpu.M68k, i: *const decoder.Instruction) !u32 { const v = try getOperandValue(m, i.dst, .Byte); const res = subBcd(0, @truncate(v), m.getFlag(cpu.M68k.FLAG_X)); try setOperandValue(m, i.dst, res.result, .Byte); m.setFlag(cpu.M68k.FLAG_X, res.carry); m.setFlag(cpu.M68k.FLAG_C, res.carry); if (res.result != 0) { m.setFlag(cpu.M68k.FLAG_Z, false); } m.pc += 2; return 6; }
+fn executeAbcd(m: *cpu.M68k, i: *const decoder.Instruction) !u32 { const s = try getOperandValue(m, i.src, .Byte); const d = try getOperandValue(m, i.dst, .Byte); const res = addBcd(@truncate(d), @truncate(s), m.getFlag(cpu.M68k.FLAG_X)); try setOperandValue(m, i.dst, res.result, .Byte); m.setFlag(cpu.M68k.FLAG_X, res.carry); m.setFlag(cpu.M68k.FLAG_C, res.carry); if (res.result != 0) { m.setFlag(cpu.M68k.FLAG_Z, false); } m.pc += i.size; return 6; }
+fn executeSbcd(m: *cpu.M68k, i: *const decoder.Instruction) !u32 { const s = try getOperandValue(m, i.src, .Byte); const d = try getOperandValue(m, i.dst, .Byte); const res = subBcd(@truncate(d), @truncate(s), m.getFlag(cpu.M68k.FLAG_X)); try setOperandValue(m, i.dst, res.result, .Byte); m.setFlag(cpu.M68k.FLAG_X, res.carry); m.setFlag(cpu.M68k.FLAG_C, res.carry); if (res.result != 0) { m.setFlag(cpu.M68k.FLAG_Z, false); } m.pc += i.size; return 6; }
+fn executeNbcd(m: *cpu.M68k, i: *const decoder.Instruction) !u32 { const v = try getOperandValue(m, i.dst, .Byte); const res = subBcd(0, @truncate(v), m.getFlag(cpu.M68k.FLAG_X)); try setOperandValue(m, i.dst, res.result, .Byte); m.setFlag(cpu.M68k.FLAG_X, res.carry); m.setFlag(cpu.M68k.FLAG_C, res.carry); if (res.result != 0) { m.setFlag(cpu.M68k.FLAG_Z, false); } m.pc += i.size; return 6; }
 fn executeMovep(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const is_m_to_r = switch (i.dst) { .DataReg => true, else => false };
     if (is_m_to_r) { 

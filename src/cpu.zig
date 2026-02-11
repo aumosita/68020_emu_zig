@@ -697,6 +697,32 @@ test "M68k RTE - Return from Exception with 68020 Stack Frame" {
     try std.testing.expectEqual(@as(u16, 0x2000), m68k.sr);
     try std.testing.expectEqual(@as(u32, 0x2000), m68k.pc);
     try std.testing.expectEqual(@as(u32, 0x300C), m68k.a[7]); // SP += 12 (format 2)
+
+    // Test Format 9 (coprocessor mid-instruction, 20 bytes)
+    m68k.a[7] = 0x4000;
+    try m68k.memory.write16(0x4000, 0x2100); // SR
+    try m68k.memory.write32(0x4002, 0x3000); // PC
+    try m68k.memory.write16(0x4006, 0x902C); // Format 9, Vector 11
+
+    m68k.pc = 0x100;
+    _ = try m68k.step();
+
+    try std.testing.expectEqual(@as(u16, 0x2100), m68k.sr);
+    try std.testing.expectEqual(@as(u32, 0x3000), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 0x4014), m68k.a[7]); // SP += 20 (format 9)
+
+    // Test Format A (short bus cycle fault, 24 bytes)
+    m68k.a[7] = 0x5000;
+    try m68k.memory.write16(0x5000, 0x2700); // SR
+    try m68k.memory.write32(0x5002, 0x4000); // PC
+    try m68k.memory.write16(0x5006, 0xA004); // Format A, Vector 1
+
+    m68k.pc = 0x100;
+    _ = try m68k.step();
+
+    try std.testing.expectEqual(@as(u16, 0x2700), m68k.sr);
+    try std.testing.expectEqual(@as(u32, 0x4000), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 0x5018), m68k.a[7]); // SP += 24 (format A)
 }
 
 test "M68k TRAP - Exception with Format/Vector Word" {
