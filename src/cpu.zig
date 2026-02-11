@@ -4,6 +4,15 @@ const decoder = @import("decoder.zig");
 const executor = @import("executor.zig");
 
 pub const M68k = struct {
+    const ICacheLines = 64;
+    const ICacheLine = struct { valid: bool, tag: u32, word: u16 };
+    pub const CoprocessorResult = union(enum) {
+        handled: u32,
+        unavailable: void,
+        fault: u32, // fault address
+    };
+    pub const CoprocessorHandler = *const fn (ctx: ?*anyopaque, m68k: *M68k, opcode: u16, pc: u32) CoprocessorResult;
+
     d: [8]u32,
     a: [8]u32,
     pc: u32,
@@ -19,6 +28,9 @@ pub const M68k = struct {
     pending_irq_level: u3,
     pending_irq_vector: ?u8,
     stopped: bool,
+    coprocessor_handler: ?CoprocessorHandler,
+    coprocessor_ctx: ?*anyopaque,
+    icache: [ICacheLines]ICacheLine,
     memory: memory.Memory,
     decoder: decoder.Decoder,
     executor: executor.Executor,
@@ -46,6 +58,9 @@ pub const M68k = struct {
             .pending_irq_level = 0,
             .pending_irq_vector = null,
             .stopped = false,
+            .coprocessor_handler = null,
+            .coprocessor_ctx = null,
+            .icache = [_]ICacheLine{.{ .valid = false, .tag = 0, .word = 0 }} ** ICacheLines,
             .memory = memory.Memory.initWithConfig(allocator, config),
             .decoder = decoder.Decoder.init(),
             .executor = executor.Executor.init(),
@@ -70,6 +85,9 @@ pub const M68k = struct {
         self.pending_irq_level = 0;
         self.pending_irq_vector = null;
         self.stopped = false;
+        self.cacr = 0;
+        self.caar = 0;
+        self.invalidateICache();
         self.cycles = 0;
     }
     
@@ -90,34 +108,83 @@ pub const M68k = struct {
             self.cycles += 4;
             return 4;
         }
-        const opcode = try self.memory.read16(self.pc);
+        const fetch = self.fetchInstructionWord(self.pc) catch |err| switch (err) {
+            error.BusRetry => {
+                self.cycles += 4;
+                return 4;
+            },
+            error.BusHalt => {
+                self.stopped = true;
+                self.cycles += 4;
+                return 4;
+            },
+            error.BusError => {
+                try self.enterBusErrorFrameA(self.pc, self.pc, .{
+                    .function_code = self.getProgramFunctionCode(),
+                    .space = .Program,
+                    .is_write = false,
+                });
+                self.cycles += 50;
+                return 50;
+            },
+            else => return err,
+        };
+        const opcode = fetch.opcode;
         M68k.current_instance = self;
+        M68k.decode_fault_addr = null;
         defer M68k.current_instance = null;
         const instruction = self.decoder.decode(opcode, self.pc, &M68k.globalReadWord) catch |err| switch (err) {
             error.IllegalInstruction => {
                 try self.enterException(4, self.pc, 0, null);
-                self.cycles += 34;
-                return 34;
+                self.cycles += 34 + fetch.penalty_cycles;
+                return 34 + fetch.penalty_cycles;
             },
             else => return err,
         };
+        if (M68k.decode_fault_addr) |fault_addr| {
+            try self.enterBusErrorFrameA(self.pc, fault_addr, .{
+                .function_code = self.getProgramFunctionCode(),
+                .space = .Program,
+                .is_write = false,
+            });
+            self.cycles += 50 + fetch.penalty_cycles;
+            return 50 + fetch.penalty_cycles;
+        }
         const cycles_used = self.executor.execute(self, &instruction) catch |err| switch (err) {
+            error.InvalidAddress, error.AddressError => {
+                try self.enterBusErrorFrameA(self.pc, self.pc, .{
+                    .function_code = self.dfc,
+                    .space = .Data,
+                    .is_write = false,
+                });
+                self.cycles += 50 + fetch.penalty_cycles;
+                return 50 + fetch.penalty_cycles;
+            },
             error.InvalidOperand, error.InvalidExtensionWord, error.InvalidControlRegister, error.Err => {
                 try self.enterException(4, self.pc, 0, null);
-                self.cycles += 34;
-                return 34;
+                self.cycles += 34 + fetch.penalty_cycles;
+                return 34 + fetch.penalty_cycles;
             },
             else => return err,
         };
-        self.cycles += cycles_used;
-        return cycles_used;
+        self.cycles += cycles_used + fetch.penalty_cycles;
+        return cycles_used + fetch.penalty_cycles;
     }
     
     threadlocal var current_instance: ?*const M68k = null;
+    threadlocal var decode_fault_addr: ?u32 = null;
     
     fn globalReadWord(addr: u32) u16 {
         if (M68k.current_instance) |inst| {
-            return inst.memory.read16(addr) catch 0;
+            const access = memory.BusAccess{
+                .function_code = inst.getProgramFunctionCode(),
+                .space = .Program,
+                .is_write = false,
+            };
+            return inst.memory.read16Bus(addr, access) catch {
+                M68k.decode_fault_addr = addr;
+                return 0;
+            };
         }
         return 0;
     }
@@ -186,6 +253,81 @@ pub const M68k = struct {
 
     pub fn setInterruptLevel(self: *M68k, level: u3) void {
         self.setInterruptRequest(level, null);
+    }
+
+    pub fn setCoprocessorHandler(self: *M68k, handler: ?CoprocessorHandler, ctx: ?*anyopaque) void {
+        self.coprocessor_handler = handler;
+        self.coprocessor_ctx = ctx;
+    }
+
+    pub fn setCacr(self: *M68k, value: u32) void {
+        if ((value & 0x8) != 0) {
+            self.invalidateICache();
+        }
+        self.cacr = value & ~@as(u32, 0x8);
+    }
+
+    fn isICacheEnabled(self: *const M68k) bool {
+        return (self.cacr & 0x1) != 0;
+    }
+
+    fn invalidateICache(self: *M68k) void {
+        for (&self.icache) |*line| {
+            line.* = .{ .valid = false, .tag = 0, .word = 0 };
+        }
+    }
+
+    pub fn getProgramFunctionCode(self: *const M68k) u3 {
+        return if ((self.sr & FLAG_S) != 0) 0b110 else 0b010;
+    }
+
+    fn fetchInstructionWord(self: *M68k, addr: u32) !struct { opcode: u16, penalty_cycles: u32 } {
+        const access = memory.BusAccess{
+            .function_code = self.getProgramFunctionCode(),
+            .space = .Program,
+            .is_write = false,
+        };
+        if (!self.isICacheEnabled()) {
+            return .{ .opcode = try self.memory.read16Bus(addr, access), .penalty_cycles = 0 };
+        }
+        const word_addr = addr >> 1;
+        const index: usize = @intCast(word_addr & (ICacheLines - 1));
+        const tag = word_addr >> std.math.log2_int(u32, ICacheLines);
+        const line = self.icache[index];
+        if (line.valid and line.tag == tag) {
+            return .{ .opcode = line.word, .penalty_cycles = 0 };
+        }
+        const fetched = try self.memory.read16Bus(addr, access);
+        self.icache[index] = .{ .valid = true, .tag = tag, .word = fetched };
+        return .{ .opcode = fetched, .penalty_cycles = 2 };
+    }
+
+    fn enterBusErrorFrameA(self: *M68k, return_pc: u32, fault_addr: u32, access: memory.BusAccess) !void {
+        const old_sr = self.sr;
+        var sr_new = self.sr | FLAG_S;
+        sr_new &= ~FLAG_M;
+        self.setSR(sr_new);
+
+        self.a[7] -= 24;
+        try self.memory.write16(self.a[7], old_sr);
+        try self.memory.write32(self.a[7] + 2, return_pc);
+        try self.memory.write16(self.a[7] + 6, (@as(u16, 0xA) << 12) | (@as(u16, 2) * 4));
+        try self.memory.write32(self.a[7] + 8, fault_addr);
+        const access_word: u16 = (@as(u16, access.function_code) << 13) |
+            (if (access.space == .Program) @as(u16, 1) << 12 else 0) |
+            (if (access.is_write) @as(u16, 1) << 11 else 0);
+        try self.memory.write16(self.a[7] + 12, access_word);
+        try self.memory.write16(self.a[7] + 14, 0);
+        try self.memory.write16(self.a[7] + 16, 0);
+        try self.memory.write16(self.a[7] + 18, 0);
+        try self.memory.write16(self.a[7] + 20, 0);
+        try self.memory.write16(self.a[7] + 22, 0);
+
+        self.pc = self.memory.read32(self.getExceptionVector(2)) catch 0;
+    }
+
+    pub fn raiseBusError(self: *M68k, fault_addr: u32, access: memory.BusAccess) !void {
+        try self.enterBusErrorFrameA(self.pc, fault_addr, access);
     }
 
     pub fn setInterruptVector(self: *M68k, level: u3, vector: u8) void {
@@ -302,6 +444,25 @@ pub const M68k = struct {
     }
 };
 
+const CoprocTestContext = struct {
+    called: bool = false,
+    emulate_unavailable: bool = false,
+};
+
+fn coprocTestHandler(ctx: ?*anyopaque, m68k: *M68k, opcode: u16, _: u32) M68k.CoprocessorResult {
+    if (ctx == null) return .{ .unavailable = {} };
+    const typed: *CoprocTestContext = @ptrCast(@alignCast(ctx.?));
+    typed.called = true;
+    if (typed.emulate_unavailable) return .{ .unavailable = {} };
+
+    // Minimal software-FPU demonstration: F-line opcode writes 1.0f to D0.
+    if ((opcode & 0xF000) == 0xF000) {
+        m68k.d[0] = 0x3F800000;
+        return .{ .handled = 12 };
+    }
+    return .{ .unavailable = {} };
+}
+
 test "M68k initialization" {
     const allocator = std.testing.allocator;
     var m68k = M68k.init(allocator);
@@ -320,6 +481,44 @@ test "M68k MOVEC VBR" {
     m68k.pc = 0x1000;
     _ = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0x12345678), m68k.vbr);
+}
+
+test "M68k instruction cache hit/miss and invalidate through CACR" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.initWithConfig(allocator, .{ .size = 64 * 1024 * 1024 });
+    defer m68k.deinit();
+
+    try m68k.memory.write16(0x01000000, 0x4E71); // NOP
+    m68k.pc = 0x01000000;
+
+    // I-cache off: no penalty.
+    const c0 = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 4), c0);
+
+    // Enable I-cache (bit0) through MOVEC D0,CACR.
+    try m68k.memory.write16(0x1000, 0x4E7B);
+    try m68k.memory.write16(0x1002, 0x0002);
+    m68k.d[0] = 0x00000001;
+    m68k.pc = 0x1000;
+    _ = try m68k.step();
+
+    // First fetch misses (+2), second fetch hits (+0).
+    m68k.pc = 0x01000000;
+    const c1 = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 6), c1);
+    m68k.pc = 0x01000000;
+    const c2 = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 4), c2);
+
+    // Invalidate through CACR write with clear bit (bit3).
+    m68k.d[0] = 0x00000009; // enable + invalidate request
+    m68k.pc = 0x1000;
+    _ = try m68k.step();
+
+    // Must miss again after invalidation.
+    m68k.pc = 0x01000000;
+    const c3 = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 6), c3);
 }
 
 test "M68k RTE - Return from Exception" {
@@ -353,6 +552,23 @@ test "M68k TRAP - Software Interrupt" {
     try std.testing.expectEqual(@as(u16, 0x0000), try m68k.memory.read16(sp));
     try std.testing.expectEqual(@as(u32, 0x1002), try m68k.memory.read32(sp + 2));
     try std.testing.expectEqual(@as(u32, 0x5000), m68k.pc);
+}
+
+test "M68k bus error during instruction fetch creates format A frame" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    try m68k.memory.write32(m68k.getExceptionVector(2), 0x6200);
+    m68k.pc = m68k.memory.size - 1; // read16 fetch will fault
+    m68k.a[7] = 0x6400;
+    m68k.setSR(0x2000);
+
+    const cycles = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 50), cycles);
+    try std.testing.expectEqual(@as(u32, 0x6200), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 0x63E8), m68k.a[7]); // 24-byte format A frame
+    try std.testing.expectEqual(@as(u16, 0xA008), try m68k.memory.read16(0x63EE)); // format A, vector 2
 }
 
 test "M68k ABCD - Add BCD" {
@@ -900,6 +1116,42 @@ test "M68k Line-F opcode enters coprocessor unavailable exception" {
     try std.testing.expectEqual(@as(u32, 0x1500), try m68k.memory.read32(0x36FA)); // faulting PC
     try std.testing.expectEqual(@as(u16, 11 * 4), try m68k.memory.read16(0x36FE)); // vector word
     try std.testing.expect((m68k.sr & M68k.FLAG_S) != 0); // now supervisor
+}
+
+test "M68k coprocessor handler can emulate F-line without vector 11" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    var ctx = CoprocTestContext{};
+    m68k.setCoprocessorHandler(coprocTestHandler, &ctx);
+    try m68k.memory.write16(0x1510, 0xF200); // representative F-line opcode
+    m68k.pc = 0x1510;
+    m68k.setSR(0x2000);
+
+    const cycles = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 12), cycles);
+    try std.testing.expect(ctx.called);
+    try std.testing.expectEqual(@as(u32, 0x1512), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 0x3F800000), m68k.d[0]); // 1.0f bit pattern
+}
+
+test "M68k coprocessor handler may defer to unavailable vector 11" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    var ctx = CoprocTestContext{ .emulate_unavailable = true };
+    m68k.setCoprocessorHandler(coprocTestHandler, &ctx);
+    try m68k.memory.write32(m68k.getExceptionVector(11), 0x5A80);
+    try m68k.memory.write16(0x1520, 0xF280);
+    m68k.pc = 0x1520;
+    m68k.a[7] = 0x3700;
+    m68k.setSR(0x0000);
+
+    _ = try m68k.step();
+    try std.testing.expect(ctx.called);
+    try std.testing.expectEqual(@as(u32, 0x5A80), m68k.pc);
 }
 
 test "M68k UNKNOWN opcode enters illegal instruction exception" {

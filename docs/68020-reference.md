@@ -15,12 +15,23 @@
 - `enterException()`에서 스택 프레임을 쌓고 핸들러로 분기
 - IRQ 레벨/벡터 오버라이드/스퓨리어스 지원
 - STOP 상태에서 IRQ로 복귀 가능
+- 명령어 fetch 버스 에러는 vector 2 진입 시 Format A(24바이트) 프레임으로 모델링
 
 ## 디코더/실행기 구조
 
 - `decoder.zig`: opcode -> `Instruction` 변환, EA 확장 해석
 - `executor.zig`: 명령 의미론, 플래그 갱신, 예외 진입
 - `cpu.zig`: step 루프, 디코드/실행 에러의 예외 라우팅
+- `memory.zig`: 버스 훅/주소 변환기(가상 메모리 연동 지점)와 기본 메모리 백엔드
+
+## 캐시/버스 모델(경량)
+
+- I-cache: 명령 fetch 경로에서만 direct-mapped 경량 모델 적용
+  - 미스 시 가중치 사이클(+2), 히트 시 추가 비용 없음
+  - `CACR` 비트 기반 enable/무효화 반영
+- 버스 추상화:
+  - `BusHook`: `ok/retry/halt/bus_error` 신호 반환
+  - `AddressTranslator`: 논리 주소 -> 물리 주소 변환 훅(PMMU 연동 지점)
 
 ## 정확도 포인트
 

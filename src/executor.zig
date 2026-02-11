@@ -98,7 +98,7 @@ pub const Executor = struct {
             .DIVS_L => return try executeDivsL(m68k, inst),
             .DIVU_L => return try executeDivuL(m68k, inst),
             .LINEA => return try executeLineAEmulator(m68k),
-            .COPROC => return try executeCoprocessorUnavailable(m68k),
+            .COPROC => return try executeCoprocessorDispatch(m68k, inst),
             .ILLEGAL => return try executeIllegalInstruction(m68k),
             .UNKNOWN => return try executeIllegalInstruction(m68k),
         }
@@ -358,7 +358,25 @@ fn executeIllegalInstruction(m: *cpu.M68k) !u32 {
     try m.enterException(4, m.pc, 0, null);
     return 34;
 }
-fn executeCoprocessorUnavailable(m: *cpu.M68k) !u32 {
+fn executeCoprocessorDispatch(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
+    if (m.coprocessor_handler) |handler| {
+        const pc_before = m.pc;
+        switch (handler(m.coprocessor_ctx, m, i.opcode, m.pc)) {
+            .handled => |cycles| {
+                if (m.pc == pc_before) m.pc += i.size;
+                return cycles;
+            },
+            .fault => |fault_addr| {
+                try m.raiseBusError(fault_addr, .{
+                    .function_code = m.getProgramFunctionCode(),
+                    .space = .Program,
+                    .is_write = false,
+                });
+                return 50;
+            },
+            .unavailable => {},
+        }
+    }
     // 0xF-line opcodes trap through Line-1111 emulator vector when coprocessor is absent.
     try m.enterException(11, m.pc, 0, null);
     return 34;
@@ -434,7 +452,7 @@ fn executeMovec(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
         switch (reg) {
             0 => m.sfc = @truncate(val & 7),
             1 => m.dfc = @truncate(val & 7),
-            2 => m.cacr = val,
+            2 => m.setCacr(val),
             0x800 => {
                 m.setStackPointer(.User, val);
             },

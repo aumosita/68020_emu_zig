@@ -3,13 +3,33 @@ const std = @import("std");
 pub const MemoryConfig = struct {
     size: u32 = 16 * 1024 * 1024,  // Default 16MB
     enforce_alignment: bool = false,  // true = 68000 mode, false = 68020 mode
+    bus_hook: ?BusHook = null,
+    bus_hook_ctx: ?*anyopaque = null,
+    address_translator: ?AddressTranslator = null,
+    address_translator_ctx: ?*anyopaque = null,
 };
+
+pub const AccessSpace = enum { Program, Data };
+
+pub const BusAccess = struct {
+    function_code: u3 = 0,
+    space: AccessSpace = .Data,
+    is_write: bool = false,
+};
+
+pub const BusSignal = enum { ok, retry, halt, bus_error };
+pub const BusHook = *const fn (ctx: ?*anyopaque, logical_addr: u32, access: BusAccess) BusSignal;
+pub const AddressTranslator = *const fn (ctx: ?*anyopaque, logical_addr: u32, access: BusAccess) anyerror!u32;
 
 pub const Memory = struct {
     // Memory data
     data: []u8,
     size: u32,
     enforce_alignment: bool,  // 68000 compatibility mode
+    bus_hook: ?BusHook,
+    bus_hook_ctx: ?*anyopaque,
+    address_translator: ?AddressTranslator,
+    address_translator_ctx: ?*anyopaque,
     allocator: std.mem.Allocator,
     
     pub fn init(allocator: std.mem.Allocator) Memory {
@@ -23,6 +43,10 @@ pub const Memory = struct {
                 .data = &[_]u8{},
                 .size = 0,
                 .enforce_alignment = config.enforce_alignment,
+                .bus_hook = config.bus_hook,
+                .bus_hook_ctx = config.bus_hook_ctx,
+                .address_translator = config.address_translator,
+                .address_translator_ctx = config.address_translator_ctx,
                 .allocator = allocator,
             };
         };
@@ -34,6 +58,10 @@ pub const Memory = struct {
             .data = data,
             .size = mem_size,
             .enforce_alignment = config.enforce_alignment,
+            .bus_hook = config.bus_hook,
+            .bus_hook_ctx = config.bus_hook_ctx,
+            .address_translator = config.address_translator,
+            .address_translator_ctx = config.address_translator_ctx,
             .allocator = allocator,
         };
     }
@@ -42,6 +70,81 @@ pub const Memory = struct {
         if (self.data.len > 0) {
             self.allocator.free(self.data);
         }
+    }
+
+    pub fn setBusHook(self: *Memory, hook: ?BusHook, ctx: ?*anyopaque) void {
+        self.bus_hook = hook;
+        self.bus_hook_ctx = ctx;
+    }
+
+    pub fn setAddressTranslator(self: *Memory, translator: ?AddressTranslator, ctx: ?*anyopaque) void {
+        self.address_translator = translator;
+        self.address_translator_ctx = ctx;
+    }
+
+    fn resolveBusAddress(self: *const Memory, logical_addr: u32, access: BusAccess) !u32 {
+        if (self.bus_hook) |hook| {
+            switch (hook(self.bus_hook_ctx, logical_addr, access)) {
+                .ok => {},
+                .retry => return error.BusRetry,
+                .halt => return error.BusHalt,
+                .bus_error => return error.BusError,
+            }
+        }
+        if (self.address_translator) |translator| {
+            return translator(self.address_translator_ctx, logical_addr, access) catch return error.BusError;
+        }
+        return logical_addr;
+    }
+
+    pub fn read8Bus(self: *const Memory, logical_addr: u32, access: BusAccess) !u8 {
+        const addr = try self.resolveBusAddress(logical_addr, access);
+        if (addr >= self.size) return error.BusError;
+        return self.data[addr];
+    }
+
+    pub fn read16Bus(self: *const Memory, logical_addr: u32, access: BusAccess) !u16 {
+        const addr = try self.resolveBusAddress(logical_addr, access);
+        if (self.enforce_alignment and (addr & 1) != 0) return error.BusError;
+        if (addr + 1 >= self.size) return error.BusError;
+        const high: u16 = self.data[addr];
+        const low: u16 = self.data[addr + 1];
+        return (high << 8) | low;
+    }
+
+    pub fn read32Bus(self: *const Memory, logical_addr: u32, access: BusAccess) !u32 {
+        const addr = try self.resolveBusAddress(logical_addr, access);
+        if (self.enforce_alignment and (addr & 1) != 0) return error.BusError;
+        if (addr + 3 >= self.size) return error.BusError;
+        const b0: u32 = self.data[addr];
+        const b1: u32 = self.data[addr + 1];
+        const b2: u32 = self.data[addr + 2];
+        const b3: u32 = self.data[addr + 3];
+        return (b0 << 24) | (b1 << 16) | (b2 << 8) | b3;
+    }
+
+    pub fn write8Bus(self: *Memory, logical_addr: u32, value: u8, access: BusAccess) !void {
+        const addr = try self.resolveBusAddress(logical_addr, access);
+        if (addr >= self.size) return error.BusError;
+        self.data[addr] = value;
+    }
+
+    pub fn write16Bus(self: *Memory, logical_addr: u32, value: u16, access: BusAccess) !void {
+        const addr = try self.resolveBusAddress(logical_addr, access);
+        if (self.enforce_alignment and (addr & 1) != 0) return error.BusError;
+        if (addr + 1 >= self.size) return error.BusError;
+        self.data[addr] = @truncate(value >> 8);
+        self.data[addr + 1] = @truncate(value & 0xFF);
+    }
+
+    pub fn write32Bus(self: *Memory, logical_addr: u32, value: u32, access: BusAccess) !void {
+        const addr = try self.resolveBusAddress(logical_addr, access);
+        if (self.enforce_alignment and (addr & 1) != 0) return error.BusError;
+        if (addr + 3 >= self.size) return error.BusError;
+        self.data[addr] = @truncate(value >> 24);
+        self.data[addr + 1] = @truncate((value >> 16) & 0xFF);
+        self.data[addr + 2] = @truncate((value >> 8) & 0xFF);
+        self.data[addr + 3] = @truncate(value & 0xFF);
     }
     
     pub fn read8(self: *const Memory, addr: u32) !u8 {
@@ -237,4 +340,41 @@ test "Memory unaligned access (68020 mode)" {
     try mem.write32(0x2001, 0xDEADBEEF);
     const value2 = try mem.read32(0x2001);
     try std.testing.expectEqual(@as(u32, 0xDEADBEEF), value2);
+}
+
+fn denyProgramFetch(_: ?*anyopaque, _: u32, access: BusAccess) BusSignal {
+    if (access.space == .Program) return .bus_error;
+    return .ok;
+}
+
+fn addTranslator(_: ?*anyopaque, logical_addr: u32, _: BusAccess) !u32 {
+    return logical_addr + 0x1000;
+}
+
+test "Memory bus hook and translator abstraction" {
+    const allocator = std.testing.allocator;
+    var mem = Memory.initWithConfig(allocator, .{
+        .size = 0x4000,
+        .bus_hook = denyProgramFetch,
+        .address_translator = addTranslator,
+    });
+    defer mem.deinit();
+
+    try mem.write8(0x1100, 0xAA); // physical write via legacy path
+
+    // Program fetch denied by hook.
+    const prg = mem.read8Bus(0x100, .{
+        .function_code = 0b010,
+        .space = .Program,
+        .is_write = false,
+    });
+    try std.testing.expectError(error.BusError, prg);
+
+    // Data read translated: logical 0x100 -> physical 0x1100.
+    const data_val = try mem.read8Bus(0x100, .{
+        .function_code = 0b001,
+        .space = .Data,
+        .is_write = false,
+    });
+    try std.testing.expectEqual(@as(u8, 0xAA), data_val);
 }
