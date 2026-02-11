@@ -11,7 +11,12 @@ pub const M68k = struct {
         unavailable: void,
         fault: u32, // fault address
     };
+    pub const BkptResult = union(enum) {
+        handled: u32,
+        illegal: void,
+    };
     pub const CoprocessorHandler = *const fn (ctx: ?*anyopaque, m68k: *M68k, opcode: u16, pc: u32) CoprocessorResult;
+    pub const BkptHandler = *const fn (ctx: ?*anyopaque, m68k: *M68k, vector: u3, pc: u32) BkptResult;
 
     d: [8]u32,
     a: [8]u32,
@@ -30,6 +35,8 @@ pub const M68k = struct {
     stopped: bool,
     coprocessor_handler: ?CoprocessorHandler,
     coprocessor_ctx: ?*anyopaque,
+    bkpt_handler: ?BkptHandler,
+    bkpt_ctx: ?*anyopaque,
     icache: [ICacheLines]ICacheLine,
     memory: memory.Memory,
     decoder: decoder.Decoder,
@@ -60,6 +67,8 @@ pub const M68k = struct {
             .stopped = false,
             .coprocessor_handler = null,
             .coprocessor_ctx = null,
+            .bkpt_handler = null,
+            .bkpt_ctx = null,
             .icache = [_]ICacheLine{.{ .valid = false, .tag = 0, .word = 0 }} ** ICacheLines,
             .memory = memory.Memory.initWithConfig(allocator, config),
             .decoder = decoder.Decoder.init(),
@@ -260,6 +269,11 @@ pub const M68k = struct {
         self.coprocessor_ctx = ctx;
     }
 
+    pub fn setBkptHandler(self: *M68k, handler: ?BkptHandler, ctx: ?*anyopaque) void {
+        self.bkpt_handler = handler;
+        self.bkpt_ctx = ctx;
+    }
+
     pub fn setCacr(self: *M68k, value: u32) void {
         if ((value & 0x8) != 0) {
             self.invalidateICache();
@@ -449,6 +463,11 @@ const CoprocTestContext = struct {
     emulate_unavailable: bool = false,
 };
 
+const BkptTestContext = struct {
+    called: bool = false,
+    last_vector: u3 = 0,
+};
+
 fn coprocTestHandler(ctx: ?*anyopaque, m68k: *M68k, opcode: u16, _: u32) M68k.CoprocessorResult {
     if (ctx == null) return .{ .unavailable = {} };
     const typed: *CoprocTestContext = @ptrCast(@alignCast(ctx.?));
@@ -461,6 +480,15 @@ fn coprocTestHandler(ctx: ?*anyopaque, m68k: *M68k, opcode: u16, _: u32) M68k.Co
         return .{ .handled = 12 };
     }
     return .{ .unavailable = {} };
+}
+
+fn bkptTestHandler(ctx: ?*anyopaque, m68k: *M68k, vector: u3, _: u32) M68k.BkptResult {
+    if (ctx == null) return .{ .illegal = {} };
+    const typed: *BkptTestContext = @ptrCast(@alignCast(ctx.?));
+    typed.called = true;
+    typed.last_vector = vector;
+    m68k.d[1] = 0xB16B00B5;
+    return .{ .handled = 14 };
 }
 
 test "M68k initialization" {
@@ -1210,8 +1238,30 @@ test "M68k BKPT traps through illegal instruction vector when no debugger is att
     try std.testing.expectEqual(@as(u32, 0x5BC0), m68k.pc);
     try std.testing.expectEqual(@as(u32, 0x38B8), m68k.a[7]);
     try std.testing.expectEqual(@as(u16, 0x2000), try m68k.memory.read16(0x38B8)); // stacked SR
-    try std.testing.expectEqual(@as(u32, 0x16C2), try m68k.memory.read32(0x38BA)); // next PC
+    try std.testing.expectEqual(@as(u32, 0x16C0), try m68k.memory.read32(0x38BA)); // offending PC
     try std.testing.expectEqual(@as(u16, 4 * 4), try m68k.memory.read16(0x38BE)); // vector word
+}
+
+test "M68k BKPT handler can consume breakpoint without exception" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    var ctx = BkptTestContext{};
+    m68k.setBkptHandler(bkptTestHandler, &ctx);
+    try m68k.memory.write16(0x16E0, 0x484F); // BKPT #7
+    m68k.pc = 0x16E0;
+    m68k.a[7] = 0x38E0;
+    m68k.setSR(0x2000);
+
+    const cycles = try m68k.step();
+
+    try std.testing.expect(ctx.called);
+    try std.testing.expectEqual(@as(u3, 7), ctx.last_vector);
+    try std.testing.expectEqual(@as(u32, 14), cycles);
+    try std.testing.expectEqual(@as(u32, 0x16E2), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 0xB16B00B5), m68k.d[1]);
+    try std.testing.expectEqual(@as(u32, 0x38E0), m68k.a[7]); // no exception frame pushed
 }
 
 test "M68k ILLEGAL opcode 0x4AFC enters illegal instruction exception" {

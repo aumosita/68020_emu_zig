@@ -763,8 +763,20 @@ fn executeRtd(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     return 10;
 }
 fn executeBkpt(m: *cpu.M68k, _: *const decoder.Instruction) !u32 {
-    // Treat BKPT as a synchronous exception instead of a silent no-op.
-    try m.enterException(4, m.pc + 2, 0, null);
+    const opcode = try m.memory.read16(m.pc);
+    const vector: u3 = @truncate(opcode & 0x7);
+    if (m.bkpt_handler) |handler| {
+        const pc_before = m.pc;
+        switch (handler(m.bkpt_ctx, m, vector, m.pc)) {
+            .handled => |cycles| {
+                if (m.pc == pc_before) m.pc += 2;
+                return cycles;
+            },
+            .illegal => {},
+        }
+    }
+    // Without an attached debugger, BKPT behaves like an illegal instruction trap.
+    try m.enterException(4, m.pc, 0, null);
     return 10;
 }
 fn executeTrapcc(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
