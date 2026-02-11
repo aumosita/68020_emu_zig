@@ -1446,6 +1446,36 @@ test "M68k decode IllegalInstruction error is routed to vector 4 exception" {
     try std.testing.expectEqual(@as(u32, 0xD000), try m68k.memory.read32(0x48FA));
 }
 
+test "M68k illegal CALLM encodings are routed to vector 4 exception" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    try m68k.memory.write32(m68k.getExceptionVector(4), 0xD300);
+
+    // mode=3 is illegal for CALLM (opcode base 0x06C0).
+    try m68k.memory.write16(0xD200, 0x06D8);
+    m68k.pc = 0xD200;
+    m68k.a[7] = 0x4A80;
+    m68k.setSR(0x2000);
+    _ = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 0xD300), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 0x4A78), m68k.a[7]);
+    try std.testing.expectEqual(@as(u32, 0xD200), try m68k.memory.read32(0x4A7A));
+    try std.testing.expectEqual(@as(u16, 4 * 4), try m68k.memory.read16(0x4A7E));
+
+    // mode=7, reg>3 is illegal for CALLM.
+    try m68k.memory.write16(0xD210, 0x06FC);
+    m68k.pc = 0xD210;
+    m68k.a[7] = 0x4B00;
+    m68k.setSR(0x2000);
+    _ = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 0xD300), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 0x4AF8), m68k.a[7]);
+    try std.testing.expectEqual(@as(u32, 0xD210), try m68k.memory.read32(0x4AFA));
+    try std.testing.expectEqual(@as(u16, 4 * 4), try m68k.memory.read16(0x4AFE));
+}
+
 test "M68k ORI/ANDI/EORI to CCR and SR semantics" {
     const allocator = std.testing.allocator;
     var m68k = M68k.init(allocator);
