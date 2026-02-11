@@ -191,6 +191,19 @@ pub const M68k = struct {
             self.pc += 2;
             return self.finalizeStepCycles(4 + fetch.penalty_cycles);
         }
+        // Hot-path optimization: ADDQ/SUBQ long to data register direct.
+        if ((opcode & 0xF000) == 0x5000 and ((opcode >> 6) & 0x3) == 0x2 and ((opcode >> 3) & 0x7) == 0x0) {
+            const reg: u3 = @truncate(opcode & 0x7);
+            const imm3: u3 = @truncate((opcode >> 9) & 0x7);
+            const imm: u32 = if (imm3 == 0) 8 else imm3;
+            const is_sub = ((opcode >> 8) & 1) != 0;
+            const d = self.d[reg];
+            const r = if (is_sub) d -% imm else d +% imm;
+            self.d[reg] = r;
+            self.applyAddSubFlagsLong(d, imm, r, is_sub);
+            self.pc += 2;
+            return self.finalizeStepCycles(4 + fetch.penalty_cycles);
+        }
         // Hot-path optimization: BRA.S with 8-bit displacement (excluding ext forms).
         if ((opcode & 0xFF00) == 0x6000 and (opcode & 0x00FF) != 0 and (opcode & 0x00FF) != 0x00FF) {
             const disp8: i8 = @bitCast(@as(u8, @truncate(opcode)));
@@ -508,6 +521,25 @@ pub const M68k = struct {
             .approx => 2,
             .detailed => 4,
         };
+    }
+
+    fn applyAddSubFlagsLong(self: *M68k, d: u32, s: u32, r: u32, is_sub: bool) void {
+        const sign: u32 = 0x80000000;
+        self.setFlag(FLAG_Z, r == 0);
+        self.setFlag(FLAG_N, (r & sign) != 0);
+        if (is_sub) {
+            const borrow = s > d;
+            const overflow = (((d ^ s) & (d ^ r)) & sign) != 0;
+            self.setFlag(FLAG_C, borrow);
+            self.setFlag(FLAG_X, borrow);
+            self.setFlag(FLAG_V, overflow);
+        } else {
+            const carry = (@as(u64, d) + @as(u64, s)) > 0xFFFF_FFFF;
+            const overflow = ((~(d ^ s) & (d ^ r)) & sign) != 0;
+            self.setFlag(FLAG_C, carry);
+            self.setFlag(FLAG_X, carry);
+            self.setFlag(FLAG_V, overflow);
+        }
     }
 
     fn buildFormatAAccessWord(access: memory.BusAccess) u16 {
@@ -977,6 +1009,42 @@ test "M68k pipeline approx mode applies EA-write overlap discount on memory dest
     m68k_approx.pc = 0x1100;
     const approx_cycles = try m68k_approx.step();
     try std.testing.expectEqual(@as(u32, 5), approx_cycles);
+}
+
+test "M68k ADDQ long data-register fast path preserves flags and cycles" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    // ADDQ.L #8,D0 (imm field 0 means 8)
+    try m68k.memory.write16(0x1200, 0x5080);
+    m68k.d[0] = 0x7FFFFFFF;
+    m68k.pc = 0x1200;
+
+    const cycles = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 4), cycles);
+    try std.testing.expectEqual(@as(u32, 0x80000007), m68k.d[0]);
+    try std.testing.expect(m68k.getFlag(M68k.FLAG_V));
+    try std.testing.expect(!m68k.getFlag(M68k.FLAG_Z));
+    try std.testing.expect(m68k.getFlag(M68k.FLAG_N));
+}
+
+test "M68k SUBQ long data-register fast path preserves flags and cycles" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    // SUBQ.L #1,D1
+    try m68k.memory.write16(0x1220, 0x5381);
+    m68k.d[1] = 0x00000000;
+    m68k.pc = 0x1220;
+
+    const cycles = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 4), cycles);
+    try std.testing.expectEqual(@as(u32, 0xFFFFFFFF), m68k.d[1]);
+    try std.testing.expect(m68k.getFlag(M68k.FLAG_C));
+    try std.testing.expect(m68k.getFlag(M68k.FLAG_X));
+    try std.testing.expect(m68k.getFlag(M68k.FLAG_N));
 }
 
 test "M68k instruction cache fill is longword aligned" {
