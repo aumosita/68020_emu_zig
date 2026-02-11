@@ -2071,8 +2071,9 @@ test "M68k CHK2/CMP2 execution semantics" {
     cmp2.extension_word = 0x0000; // D0
     m68k.d[0] = 15;
     m68k.pc = 0x200;
-    _ = try m68k.executor.execute(&m68k, &cmp2);
+    const cmp2_cycles = try m68k.executor.execute(&m68k, &cmp2);
     try std.testing.expect((m68k.sr & M68k.FLAG_Z) != 0);
+    try std.testing.expectEqual(@as(u32, 12), cmp2_cycles);
 
     // CHK2.W (0x6000),D0 with D0=25 => out of range, exception #6
     try m68k.memory.write32(m68k.getExceptionVector(6), 0x7000);
@@ -2087,10 +2088,11 @@ test "M68k CHK2/CMP2 execution semantics" {
     chk2.src = .{ .Address = 0x6000 };
     chk2.extension_word = 0x0000; // D0
     m68k.pc = 0x220;
-    _ = try m68k.executor.execute(&m68k, &chk2);
+    const chk2_cycles = try m68k.executor.execute(&m68k, &chk2);
 
     try std.testing.expectEqual(@as(u32, 0x7000), m68k.pc);
     try std.testing.expectEqual(@as(u32, 0x2FF8), m68k.a[7]);
+    try std.testing.expectEqual(@as(u32, 44), chk2_cycles);
 }
 
 test "M68k exception from master stack uses ISP and RTE restores MSP" {
@@ -2556,7 +2558,7 @@ test "M68k CALLM and RTM execute module frame round-trip" {
     m68k.a[7] = 0x5000;
     m68k.setSR(0x2015);
     m68k.d[3] = 0xAABBCCDD;
-    _ = try m68k.step();
+    const callm_cycles = try m68k.step();
 
     try std.testing.expectEqual(@as(u32, 0xE542), m68k.pc);
     try std.testing.expectEqual(@as(u32, 0x4FF4), m68k.a[7]);
@@ -2565,15 +2567,17 @@ test "M68k CALLM and RTM execute module frame round-trip" {
     try std.testing.expectEqual(@as(u32, 0xE308), try m68k.memory.read32(0x4FF6));
     try std.testing.expectEqual(@as(u32, 0xAABBCCDD), try m68k.memory.read32(0x4FFA));
     try std.testing.expectEqual(@as(u16, 0x0004), try m68k.memory.read16(0x4FFE));
+    try std.testing.expectEqual(@as(u32, 40), callm_cycles);
 
     m68k.setSR((m68k.sr & 0xFF00) | 0x00);
     m68k.d[3] = 0;
-    _ = try m68k.step();
+    const rtm_cycles = try m68k.step();
 
     try std.testing.expectEqual(@as(u32, 0xE308), m68k.pc);
     try std.testing.expectEqual(@as(u32, 0x5004), m68k.a[7]);
     try std.testing.expectEqual(@as(u32, 0xAABBCCDD), m68k.d[3]);
     try std.testing.expectEqual(@as(u16, 0x0015), m68k.sr & 0x00FF);
+    try std.testing.expectEqual(@as(u32, 24), rtm_cycles);
 }
 
 test "M68k TAS works for data register and memory operands" {
@@ -2585,19 +2589,21 @@ test "M68k TAS works for data register and memory operands" {
     try m68k.memory.write16(0xE560, 0x4AC0);
     m68k.pc = 0xE560;
     m68k.d[0] = 0x00000001;
-    _ = try m68k.step();
+    const tas_reg_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u8, 0x81), @as(u8, @truncate(m68k.d[0])));
     try std.testing.expect((m68k.sr & M68k.FLAG_Z) == 0);
     try std.testing.expect((m68k.sr & M68k.FLAG_N) == 0);
+    try std.testing.expectEqual(@as(u32, 4), tas_reg_cycles);
 
     // TAS (A0)
     try m68k.memory.write16(0xE570, 0x4AD0);
     try m68k.memory.write8(0x2200, 0x00);
     m68k.pc = 0xE570;
     m68k.a[0] = 0x2200;
-    _ = try m68k.step();
+    const tas_mem_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u8, 0x80), try m68k.memory.read8(0x2200));
     try std.testing.expect((m68k.sr & M68k.FLAG_Z) != 0);
+    try std.testing.expectEqual(@as(u32, 14), tas_mem_cycles);
 }
 
 test "M68k MOVEM updates addressing mode semantics correctly" {
@@ -2883,11 +2889,12 @@ test "M68k MUL*_L and DIV*_L execution semantics" {
     m68k.pc = 0xE600;
     m68k.d[1] = 3;
     m68k.d[2] = 0xFFFFFFFF;
-    _ = try m68k.step();
+    const mulu_l_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 15), m68k.d[1]);
     try std.testing.expectEqual(@as(u32, 0), m68k.d[2]);
     try std.testing.expect(!m68k.getFlag(M68k.FLAG_V));
     try std.testing.expect(!m68k.getFlag(M68k.FLAG_C));
+    try std.testing.expectEqual(@as(u32, 40), mulu_l_cycles);
 
     // MULS.L #4,D3:D4 with overflow in 32-bit signed result.
     try m68k.memory.write16(0xE610, 0x4C3C);
@@ -2896,10 +2903,11 @@ test "M68k MUL*_L and DIV*_L execution semantics" {
     m68k.pc = 0xE610;
     m68k.d[3] = 0x40000000;
     m68k.d[4] = 0;
-    _ = try m68k.step();
+    const muls_l_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0), m68k.d[3]);
     try std.testing.expectEqual(@as(u32, 1), m68k.d[4]);
     try std.testing.expect(m68k.getFlag(M68k.FLAG_V));
+    try std.testing.expectEqual(@as(u32, 40), muls_l_cycles);
 
     // DIVU.L #2,D1:D2 : dividend = D2:D1 = 0x00000001_00000000
     try m68k.memory.write16(0xE620, 0x4C3C);
@@ -2908,10 +2916,11 @@ test "M68k MUL*_L and DIV*_L execution semantics" {
     m68k.pc = 0xE620;
     m68k.d[1] = 0x00000000;
     m68k.d[2] = 0x00000001;
-    _ = try m68k.step();
+    const divu_l_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0x80000000), m68k.d[1]);
     try std.testing.expectEqual(@as(u32, 0), m68k.d[2]);
     try std.testing.expect(!m68k.getFlag(M68k.FLAG_V));
+    try std.testing.expectEqual(@as(u32, 76), divu_l_cycles);
 
     // DIVS.L divide by zero -> vector 5.
     try m68k.memory.write32(m68k.getExceptionVector(5), 0xE700);
@@ -2923,6 +2932,7 @@ test "M68k MUL*_L and DIV*_L execution semantics" {
     m68k.setSR(0x2000);
     m68k.d[5] = 123;
     m68k.d[2] = 456;
-    _ = try m68k.step();
+    const divs_l_divzero_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0xE700), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 70), divs_l_divzero_cycles);
 }
