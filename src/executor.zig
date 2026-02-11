@@ -1,4 +1,4 @@
-const std = @import("std");
+﻿const std = @import("std");
 const cpu = @import("cpu.zig");
 const decoder = @import("decoder.zig");
 
@@ -56,6 +56,7 @@ pub const Executor = struct {
             .TST => return try executeTst(m68k, inst),
             .SWAP => return try executeSwap(m68k, inst),
             .EXT => return try executeExt(m68k, inst),
+            .EXTB => return try executeExt(m68k, inst),  // EXTB uses same function
             .LEA => return try executeLea(m68k, inst),
             
             .RTS => return try executeRts(m68k),
@@ -100,6 +101,30 @@ pub const Executor = struct {
             .NBCD => return try executeNbcd(m68k, inst),
             .MOVEP => return try executeMovep(m68k, inst),
             
+            // 68020 exclusive instructions
+            .BFTST => return try executeBftst(m68k, inst),
+            .BFSET => return try executeBfset(m68k, inst),
+            .BFCLR => return try executeBfclr(m68k, inst),
+            .BFEXTS => return try executeBfexts(m68k, inst),
+            .BFEXTU => return try executeBfextu(m68k, inst),
+            .BFINS => return try executeBfins(m68k, inst),
+            .BFFFO => return try executeBfffo(m68k, inst),
+            .CAS => return try executeCas(m68k, inst),
+            .CAS2 => return try executeCas2(m68k, inst),
+            
+            // 68020 Phase 2
+            .RTD => return try executeRtd(m68k, inst),
+            .BKPT => return try executeBkpt(m68k, inst),
+            .TRAPcc => return try executeTrapcc(m68k, inst),
+            .CHK2 => return try executeChk2(m68k, inst),
+            .CMP2 => return try executeCmp2(m68k, inst),
+            .PACK => return try executePack(m68k, inst),
+            .UNPK => return try executeUnpk(m68k, inst),
+            .MULS_L => return try executeMulsL(m68k, inst),
+            .MULU_L => return try executeMuluL(m68k, inst),
+            .DIVS_L => return try executeDivsL(m68k, inst),
+            .DIVU_L => return try executeDivuL(m68k, inst),
+            
             .ILLEGAL => return error.IllegalInstruction,
             else => {
                 m68k.pc += 2;
@@ -132,8 +157,16 @@ fn executeMoveq(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
 }
 
 fn executeMove(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    var cycles: u32 = 4; // Base MOVE cycles
+    
+    // Add EA cycles for source
+    cycles += getEACycles(inst.src, inst.data_size, true);
+    
     // Get source value
     const src_value = try getOperandValue(m68k, inst.src, inst.data_size);
+    
+    // Add EA cycles for destination
+    cycles += getEACycles(inst.dst, inst.data_size, false);
     
     // Store to destination
     try setOperandValue(m68k, inst.dst, src_value, inst.data_size);
@@ -142,7 +175,7 @@ fn executeMove(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     m68k.setFlags(src_value, inst.data_size);
     
     m68k.pc += 2;
-    return 4;
+    return cycles;
 }
 
 fn executeMovea(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
@@ -150,6 +183,9 @@ fn executeMovea(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
         .AddrReg => |r| r,
         else => return error.InvalidOperand,
     };
+    
+    var cycles: u32 = 4;
+    cycles += getEACycles(inst.src, inst.data_size, true);
     
     var value = try getOperandValue(m68k, inst.src, inst.data_size);
     
@@ -163,7 +199,7 @@ fn executeMovea(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     // MOVEA doesn't affect flags
     
     m68k.pc += 2;
-    return 4;
+    return cycles;
 }
 
 // ============================================================================
@@ -176,6 +212,11 @@ fn executeAdd(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     const opmode = (inst.opcode >> 6) & 0x7;
     const direction = (opmode >> 2) & 1; // 0 = <ea> + Dn -> Dn, 1 = Dn + <ea> -> <ea>
     
+    var cycles: u32 = switch (inst.data_size) {
+        .Byte, .Word => 4,
+        .Long => 6,
+    };
+    
     if (direction == 0) {
         // ADD <ea>, Dn
         const reg = switch (inst.dst) {
@@ -183,6 +224,7 @@ fn executeAdd(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
             else => return error.InvalidOperand,
         };
         
+        cycles += getEACycles(inst.src, inst.data_size, true);
         const src_value = try getOperandValue(m68k, inst.src, inst.data_size);
         const dst_value = getRegisterValue(m68k.d[reg], inst.data_size);
         const result = dst_value +% src_value;
@@ -191,13 +233,16 @@ fn executeAdd(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
         setArithmeticFlags(m68k, dst_value, src_value, result, inst.data_size, false);
         
         m68k.pc += 2;
-        return 4;
+        return cycles;
     } else {
         // ADD Dn, <ea>
         const reg = switch (inst.src) {
             .DataReg => |r| r,
             else => return error.InvalidOperand,
         };
+        
+        cycles += getEACycles(inst.dst, inst.data_size, true);
+        cycles += getEACycles(inst.dst, inst.data_size, false); // Write back
         
         const src_value = getRegisterValue(m68k.d[reg], inst.data_size);
         const dst_value = try getOperandValue(m68k, inst.dst, inst.data_size);
@@ -207,7 +252,7 @@ fn executeAdd(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
         setArithmeticFlags(m68k, dst_value, src_value, result, inst.data_size, false);
         
         m68k.pc += 2;
-        return 8;
+        return cycles;
     }
 }
 
@@ -216,6 +261,9 @@ fn executeAdda(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
         .AddrReg => |r| r,
         else => return error.InvalidOperand,
     };
+    
+    var cycles: u32 = 8;
+    cycles += getEACycles(inst.src, inst.data_size, true);
     
     var value = try getOperandValue(m68k, inst.src, inst.data_size);
     
@@ -229,10 +277,17 @@ fn executeAdda(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     // ADDA doesn't affect flags
     
     m68k.pc += 2;
-    return 8;
+    return cycles;
 }
 
 fn executeAddi(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    var cycles: u32 = switch (inst.data_size) {
+        .Byte, .Word => 8,
+        .Long => 16,
+    };
+    cycles += getEACycles(inst.dst, inst.data_size, true);
+    cycles += getEACycles(inst.dst, inst.data_size, false);
+    
     const imm = try getOperandValue(m68k, inst.src, inst.data_size);
     const dst_value = try getOperandValue(m68k, inst.dst, inst.data_size);
     const result = dst_value +% imm;
@@ -241,7 +296,7 @@ fn executeAddi(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     setArithmeticFlags(m68k, dst_value, imm, result, inst.data_size, false);
     
     m68k.pc += 4; // ADDI has extension word
-    return 8;
+    return cycles;
 }
 
 fn executeAddq(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
@@ -249,6 +304,8 @@ fn executeAddq(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
         .Immediate8 => |v| @as(u32, v),
         else => return error.InvalidOperand,
     };
+    
+    var cycles: u32 = 4;
     
     switch (inst.dst) {
         .DataReg => |reg| {
@@ -260,8 +317,12 @@ fn executeAddq(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
         .AddrReg => |reg| {
             m68k.a[reg] = m68k.a[reg] +% immediate;
             // No flags for address register
+            cycles = 8; // ADDQ to An takes 8 cycles
         },
         else => {
+            cycles += getEACycles(inst.dst, inst.data_size, true);
+            cycles += getEACycles(inst.dst, inst.data_size, false);
+            
             const old_value = try getOperandValue(m68k, inst.dst, inst.data_size);
             const result = old_value +% immediate;
             try setOperandValue(m68k, inst.dst, result, inst.data_size);
@@ -270,10 +331,18 @@ fn executeAddq(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     }
     
     m68k.pc += 2;
-    return 4;
+    return cycles;
 }
 
 fn executeAddx(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    var cycles: u32 = switch (inst.data_size) {
+        .Byte, .Word => 4,
+        .Long => 8,
+    };
+    cycles += getEACycles(inst.src, inst.data_size, true);
+    cycles += getEACycles(inst.dst, inst.data_size, true);
+    cycles += getEACycles(inst.dst, inst.data_size, false);
+    
     const x_bit: u32 = if (m68k.getFlag(cpu.M68k.FLAG_X)) 1 else 0;
     
     const src_value = try getOperandValue(m68k, inst.src, inst.data_size);
@@ -284,7 +353,7 @@ fn executeAddx(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     setArithmeticFlags(m68k, dst_value, src_value +% x_bit, result, inst.data_size, false);
     
     m68k.pc += 2;
-    return 4;
+    return cycles;
 }
 
 // ============================================================================
@@ -295,6 +364,11 @@ fn executeSub(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     const opmode = (inst.opcode >> 6) & 0x7;
     const direction = (opmode >> 2) & 1;
     
+    var cycles: u32 = switch (inst.data_size) {
+        .Byte, .Word => 4,
+        .Long => 6,
+    };
+    
     if (direction == 0) {
         // SUB <ea>, Dn
         const reg = switch (inst.dst) {
@@ -302,6 +376,7 @@ fn executeSub(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
             else => return error.InvalidOperand,
         };
         
+        cycles += getEACycles(inst.src, inst.data_size, true);
         const src_value = try getOperandValue(m68k, inst.src, inst.data_size);
         const dst_value = getRegisterValue(m68k.d[reg], inst.data_size);
         const result = dst_value -% src_value;
@@ -310,13 +385,16 @@ fn executeSub(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
         setArithmeticFlags(m68k, dst_value, src_value, result, inst.data_size, true);
         
         m68k.pc += 2;
-        return 4;
+        return cycles;
     } else {
         // SUB Dn, <ea>
         const reg = switch (inst.src) {
             .DataReg => |r| r,
             else => return error.InvalidOperand,
         };
+        
+        cycles += getEACycles(inst.dst, inst.data_size, true);
+        cycles += getEACycles(inst.dst, inst.data_size, false);
         
         const src_value = getRegisterValue(m68k.d[reg], inst.data_size);
         const dst_value = try getOperandValue(m68k, inst.dst, inst.data_size);
@@ -326,7 +404,7 @@ fn executeSub(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
         setArithmeticFlags(m68k, dst_value, src_value, result, inst.data_size, true);
         
         m68k.pc += 2;
-        return 8;
+        return cycles;
     }
 }
 
@@ -335,6 +413,9 @@ fn executeSuba(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
         .AddrReg => |r| r,
         else => return error.InvalidOperand,
     };
+    
+    var cycles: u32 = 8;
+    cycles += getEACycles(inst.src, inst.data_size, true);
     
     var value = try getOperandValue(m68k, inst.src, inst.data_size);
     
@@ -346,10 +427,17 @@ fn executeSuba(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     m68k.a[reg] = m68k.a[reg] -% value;
     
     m68k.pc += 2;
-    return 8;
+    return cycles;
 }
 
 fn executeSubi(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    var cycles: u32 = switch (inst.data_size) {
+        .Byte, .Word => 8,
+        .Long => 16,
+    };
+    cycles += getEACycles(inst.dst, inst.data_size, true);
+    cycles += getEACycles(inst.dst, inst.data_size, false);
+    
     const imm = try getOperandValue(m68k, inst.src, inst.data_size);
     const dst_value = try getOperandValue(m68k, inst.dst, inst.data_size);
     const result = dst_value -% imm;
@@ -358,7 +446,7 @@ fn executeSubi(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     setArithmeticFlags(m68k, dst_value, imm, result, inst.data_size, true);
     
     m68k.pc += 4;
-    return 8;
+    return cycles;
 }
 
 fn executeSubq(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
@@ -366,6 +454,8 @@ fn executeSubq(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
         .Immediate8 => |v| @as(u32, v),
         else => return error.InvalidOperand,
     };
+    
+    var cycles: u32 = 4;
     
     switch (inst.dst) {
         .DataReg => |reg| {
@@ -376,8 +466,12 @@ fn executeSubq(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
         },
         .AddrReg => |reg| {
             m68k.a[reg] = m68k.a[reg] -% immediate;
+            cycles = 8;
         },
         else => {
+            cycles += getEACycles(inst.dst, inst.data_size, true);
+            cycles += getEACycles(inst.dst, inst.data_size, false);
+            
             const old_value = try getOperandValue(m68k, inst.dst, inst.data_size);
             const result = old_value -% immediate;
             try setOperandValue(m68k, inst.dst, result, inst.data_size);
@@ -386,10 +480,18 @@ fn executeSubq(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     }
     
     m68k.pc += 2;
-    return 4;
+    return cycles;
 }
 
 fn executeSubx(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    var cycles: u32 = switch (inst.data_size) {
+        .Byte, .Word => 4,
+        .Long => 8,
+    };
+    cycles += getEACycles(inst.src, inst.data_size, true);
+    cycles += getEACycles(inst.dst, inst.data_size, true);
+    cycles += getEACycles(inst.dst, inst.data_size, false);
+    
     const x_bit: u32 = if (m68k.getFlag(cpu.M68k.FLAG_X)) 1 else 0;
     
     const src_value = try getOperandValue(m68k, inst.src, inst.data_size);
@@ -400,7 +502,7 @@ fn executeSubx(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     setArithmeticFlags(m68k, dst_value, src_value +% x_bit, result, inst.data_size, true);
     
     m68k.pc += 2;
-    return 4;
+    return cycles;
 }
 
 // ============================================================================
@@ -413,6 +515,9 @@ fn executeCmp(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
         else => return error.InvalidOperand,
     };
     
+    var cycles: u32 = 4;
+    cycles += getEACycles(inst.src, inst.data_size, true);
+    
     const src_value = try getOperandValue(m68k, inst.src, inst.data_size);
     const dst_value = getRegisterValue(m68k.d[reg], inst.data_size);
     const result = dst_value -% src_value;
@@ -420,7 +525,7 @@ fn executeCmp(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     setArithmeticFlags(m68k, dst_value, src_value, result, inst.data_size, true);
     
     m68k.pc += 2;
-    return 4;
+    return cycles;
 }
 
 fn executeCmpa(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
@@ -428,6 +533,9 @@ fn executeCmpa(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
         .AddrReg => |r| r,
         else => return error.InvalidOperand,
     };
+    
+    var cycles: u32 = 6;
+    cycles += getEACycles(inst.src, inst.data_size, true);
     
     var src_value = try getOperandValue(m68k, inst.src, inst.data_size);
     if (inst.data_size == .Word) {
@@ -439,10 +547,16 @@ fn executeCmpa(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     setArithmeticFlags(m68k, m68k.a[reg], src_value, result, .Long, true);
     
     m68k.pc += 2;
-    return 6;
+    return cycles;
 }
 
 fn executeCmpi(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    var cycles: u32 = switch (inst.data_size) {
+        .Byte, .Word => 8,
+        .Long => 14,
+    };
+    cycles += getEACycles(inst.dst, inst.data_size, true);
+    
     const imm = try getOperandValue(m68k, inst.src, inst.data_size);
     const dst_value = try getOperandValue(m68k, inst.dst, inst.data_size);
     const result = dst_value -% imm;
@@ -450,7 +564,7 @@ fn executeCmpi(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     setArithmeticFlags(m68k, dst_value, imm, result, inst.data_size, true);
     
     m68k.pc += 4;
-    return 8;
+    return cycles;
 }
 
 // ============================================================================
@@ -461,12 +575,15 @@ fn executeAnd(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     const opmode = (inst.opcode >> 6) & 0x7;
     const direction = (opmode >> 2) & 1;
     
+    var cycles: u32 = 4;
+    
     if (direction == 0) {
         const reg = switch (inst.dst) {
             .DataReg => |r| r,
             else => return error.InvalidOperand,
         };
         
+        cycles += getEACycles(inst.src, inst.data_size, true);
         const src_value = try getOperandValue(m68k, inst.src, inst.data_size);
         const dst_value = getRegisterValue(m68k.d[reg], inst.data_size);
         const result = dst_value & src_value;
@@ -479,6 +596,9 @@ fn executeAnd(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
             else => return error.InvalidOperand,
         };
         
+        cycles += getEACycles(inst.dst, inst.data_size, true);
+        cycles += getEACycles(inst.dst, inst.data_size, false);
+        
         const src_value = getRegisterValue(m68k.d[reg], inst.data_size);
         const dst_value = try getOperandValue(m68k, inst.dst, inst.data_size);
         const result = dst_value & src_value;
@@ -488,10 +608,17 @@ fn executeAnd(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     }
     
     m68k.pc += 2;
-    return 4;
+    return cycles;
 }
 
 fn executeAndi(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    var cycles: u32 = switch (inst.data_size) {
+        .Byte, .Word => 8,
+        .Long => 16,
+    };
+    cycles += getEACycles(inst.dst, inst.data_size, true);
+    cycles += getEACycles(inst.dst, inst.data_size, false);
+    
     const imm = try getOperandValue(m68k, inst.src, inst.data_size);
     const dst_value = try getOperandValue(m68k, inst.dst, inst.data_size);
     const result = dst_value & imm;
@@ -500,12 +627,14 @@ fn executeAndi(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     m68k.setFlags(result, inst.data_size);
     
     m68k.pc += 4;
-    return 8;
+    return cycles;
 }
 
 fn executeOr(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     const opmode = (inst.opcode >> 6) & 0x7;
     const direction = (opmode >> 2) & 1;
+    
+    var cycles: u32 = 4;
     
     if (direction == 0) {
         const reg = switch (inst.dst) {
@@ -513,6 +642,7 @@ fn executeOr(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
             else => return error.InvalidOperand,
         };
         
+        cycles += getEACycles(inst.src, inst.data_size, true);
         const src_value = try getOperandValue(m68k, inst.src, inst.data_size);
         const dst_value = getRegisterValue(m68k.d[reg], inst.data_size);
         const result = dst_value | src_value;
@@ -525,6 +655,9 @@ fn executeOr(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
             else => return error.InvalidOperand,
         };
         
+        cycles += getEACycles(inst.dst, inst.data_size, true);
+        cycles += getEACycles(inst.dst, inst.data_size, false);
+        
         const src_value = getRegisterValue(m68k.d[reg], inst.data_size);
         const dst_value = try getOperandValue(m68k, inst.dst, inst.data_size);
         const result = dst_value | src_value;
@@ -534,10 +667,17 @@ fn executeOr(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     }
     
     m68k.pc += 2;
-    return 4;
+    return cycles;
 }
 
 fn executeOri(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    var cycles: u32 = switch (inst.data_size) {
+        .Byte, .Word => 8,
+        .Long => 16,
+    };
+    cycles += getEACycles(inst.dst, inst.data_size, true);
+    cycles += getEACycles(inst.dst, inst.data_size, false);
+    
     const imm = try getOperandValue(m68k, inst.src, inst.data_size);
     const dst_value = try getOperandValue(m68k, inst.dst, inst.data_size);
     const result = dst_value | imm;
@@ -546,7 +686,7 @@ fn executeOri(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     m68k.setFlags(result, inst.data_size);
     
     m68k.pc += 4;
-    return 8;
+    return cycles;
 }
 
 fn executeEor(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
@@ -554,6 +694,10 @@ fn executeEor(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
         .DataReg => |r| r,
         else => return error.InvalidOperand,
     };
+    
+    var cycles: u32 = 4;
+    cycles += getEACycles(inst.dst, inst.data_size, true);
+    cycles += getEACycles(inst.dst, inst.data_size, false);
     
     const src_value = getRegisterValue(m68k.d[reg], inst.data_size);
     const dst_value = try getOperandValue(m68k, inst.dst, inst.data_size);
@@ -563,10 +707,17 @@ fn executeEor(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     m68k.setFlags(result, inst.data_size);
     
     m68k.pc += 2;
-    return 4;
+    return cycles;
 }
 
 fn executeEori(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    var cycles: u32 = switch (inst.data_size) {
+        .Byte, .Word => 8,
+        .Long => 16,
+    };
+    cycles += getEACycles(inst.dst, inst.data_size, true);
+    cycles += getEACycles(inst.dst, inst.data_size, false);
+    
     const imm = try getOperandValue(m68k, inst.src, inst.data_size);
     const dst_value = try getOperandValue(m68k, inst.dst, inst.data_size);
     const result = dst_value ^ imm;
@@ -575,10 +726,14 @@ fn executeEori(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     m68k.setFlags(result, inst.data_size);
     
     m68k.pc += 4;
-    return 8;
+    return cycles;
 }
 
 fn executeNot(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    var cycles: u32 = if (inst.data_size == .Long) @as(u32, 6) else 4;
+    cycles += getEACycles(inst.dst, inst.data_size, true);
+    cycles += getEACycles(inst.dst, inst.data_size, false);
+    
     const dst_value = try getOperandValue(m68k, inst.dst, inst.data_size);
     const result = ~dst_value;
     
@@ -586,7 +741,7 @@ fn executeNot(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     m68k.setFlags(result, inst.data_size);
     
     m68k.pc += 2;
-    return 4;
+    return cycles;
 }
 
 // ============================================================================
@@ -598,6 +753,9 @@ fn executeMulu(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
         .DataReg => |r| r,
         else => return error.InvalidOperand,
     };
+    
+    var cycles: u32 = 38; // Base MULU cycles
+    cycles += getEACycles(inst.src, .Word, true);
     
     const src_value: u16 = @truncate(try getOperandValue(m68k, inst.src, .Word));
     const dst_value: u16 = @truncate(m68k.d[reg]);
@@ -611,7 +769,7 @@ fn executeMulu(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     m68k.setFlag(cpu.M68k.FLAG_C, false);
     
     m68k.pc += 2;
-    return 38;
+    return cycles;
 }
 
 fn executeMuls(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
@@ -619,6 +777,9 @@ fn executeMuls(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
         .DataReg => |r| r,
         else => return error.InvalidOperand,
     };
+    
+    var cycles: u32 = 38;
+    cycles += getEACycles(inst.src, .Word, true);
     
     const src_value: i16 = @bitCast(@as(u16, @truncate(try getOperandValue(m68k, inst.src, .Word))));
     const dst_value: i16 = @bitCast(@as(u16, @truncate(m68k.d[reg])));
@@ -632,7 +793,7 @@ fn executeMuls(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     m68k.setFlag(cpu.M68k.FLAG_C, false);
     
     m68k.pc += 2;
-    return 38;
+    return cycles;
 }
 
 fn executeDivu(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
@@ -640,6 +801,9 @@ fn executeDivu(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
         .DataReg => |r| r,
         else => return error.InvalidOperand,
     };
+    
+    var cycles: u32 = 76;
+    cycles += getEACycles(inst.src, .Word, true);
     
     const divisor: u16 = @truncate(try getOperandValue(m68k, inst.src, .Word));
     if (divisor == 0) {
@@ -661,7 +825,7 @@ fn executeDivu(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     m68k.setFlag(cpu.M68k.FLAG_C, false);
     
     m68k.pc += 2;
-    return 76;
+    return cycles;
 }
 
 fn executeDivs(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
@@ -669,6 +833,9 @@ fn executeDivs(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
         .DataReg => |r| r,
         else => return error.InvalidOperand,
     };
+    
+    var cycles: u32 = 76;
+    cycles += getEACycles(inst.src, .Word, true);
     
     const divisor: i16 = @bitCast(@as(u16, @truncate(try getOperandValue(m68k, inst.src, .Word))));
     if (divisor == 0) {
@@ -692,7 +859,7 @@ fn executeDivs(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     m68k.setFlag(cpu.M68k.FLAG_C, false);
     
     m68k.pc += 2;
-    return 76;
+    return cycles;
 }
 
 // ============================================================================
@@ -700,6 +867,13 @@ fn executeDivs(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
 // ============================================================================
 
 fn executeNeg(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    var cycles: u32 = switch (inst.data_size) {
+        .Byte, .Word => 4,
+        .Long => 6,
+    };
+    cycles += getEACycles(inst.dst, inst.data_size, true);
+    cycles += getEACycles(inst.dst, inst.data_size, false);
+    
     const old = try getOperandValue(m68k, inst.dst, inst.data_size);
     const result = 0 -% old;
     
@@ -707,10 +881,17 @@ fn executeNeg(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     setArithmeticFlags(m68k, 0, old, result, inst.data_size, true);
     
     m68k.pc += 2;
-    return 4;
+    return cycles;
 }
 
 fn executeNegx(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    var cycles: u32 = switch (inst.data_size) {
+        .Byte, .Word => 4,
+        .Long => 6,
+    };
+    cycles += getEACycles(inst.dst, inst.data_size, true);
+    cycles += getEACycles(inst.dst, inst.data_size, false);
+    
     const x_bit: u32 = if (m68k.getFlag(cpu.M68k.FLAG_X)) 1 else 0;
     const old = try getOperandValue(m68k, inst.dst, inst.data_size);
     const result = 0 -% old -% x_bit;
@@ -719,10 +900,13 @@ fn executeNegx(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     setArithmeticFlags(m68k, 0, old +% x_bit, result, inst.data_size, true);
     
     m68k.pc += 2;
-    return 4;
+    return cycles;
 }
 
 fn executeClr(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    var cycles: u32 = if (inst.data_size == .Long) @as(u32, 6) else 4;
+    cycles += getEACycles(inst.dst, inst.data_size, false); // Only write
+    
     try setOperandValue(m68k, inst.dst, 0, inst.data_size);
     
     m68k.setFlag(cpu.M68k.FLAG_N, false);
@@ -731,15 +915,18 @@ fn executeClr(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     m68k.setFlag(cpu.M68k.FLAG_C, false);
     
     m68k.pc += 2;
-    return 4;
+    return cycles;
 }
 
 fn executeTst(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    var cycles: u32 = 4;
+    cycles += getEACycles(inst.dst, inst.data_size, true);
+    
     const value = try getOperandValue(m68k, inst.dst, inst.data_size);
     m68k.setFlags(value, inst.data_size);
     
     m68k.pc += 2;
-    return 4;
+    return cycles;
 }
 
 fn executeSwap(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
@@ -791,11 +978,14 @@ fn executeLea(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
         else => return error.InvalidOperand,
     };
     
+    var cycles: u32 = 4;
+    cycles += getEACycles(inst.src, .Long, true);
+    
     const ea = try calculateEA(m68k, inst.src);
     m68k.a[reg] = ea;
     
     m68k.pc += 2;
-    return 4;
+    return cycles;
 }
 
 // ============================================================================
@@ -814,14 +1004,14 @@ fn executeRtr(m68k: *cpu.M68k) !u32 {
     // Stack: [CCR (word)] [PC (long)]
     const sp = m68k.a[7];
     
-    // CCR 복원 (하위 8비트만)
+    // Restore CCR (lower 8 bits)
     const ccr_word = try m68k.memory.read16(sp);
     m68k.sr = (m68k.sr & 0xFF00) | (ccr_word & 0x00FF);
     
-    // PC 복원
+    // Restore PC
     m68k.pc = try m68k.memory.read32(sp + 2);
     
-    // 스택 포인터 업데이트
+    // ?�택 ?�인???�데?�트
     m68k.a[7] = sp + 6;
     
     return 20;
@@ -832,13 +1022,13 @@ fn executeRte(m68k: *cpu.M68k) !u32 {
     // Stack: [SR (word)] [PC (long)]
     const sp = m68k.a[7];
     
-    // SR 복원 (전체)
+    // SR 복원 (?�체)
     m68k.sr = try m68k.memory.read16(sp);
     
-    // PC 복원
+    // Restore PC
     m68k.pc = try m68k.memory.read32(sp + 2);
     
-    // 스택 포인터 업데이트
+    // ?�택 ?�인???�데?�트
     m68k.a[7] = sp + 6;
     
     return 20;
@@ -851,20 +1041,20 @@ fn executeTrap(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
         else => return error.InvalidOperand,
     };
     
-    // TRAP vector는 32-47 (0x80-0xBC)
+    // TRAP vector??32-47 (0x80-0xBC)
     const vector_number: u8 = 32 + (vector & 0xF);
     const vector_addr = m68k.getExceptionVector(vector_number);
     
-    // 현재 SR과 PC를 스택에 저장
+    // ?�재 SR�?PC�??�택???�??
     const sp = m68k.a[7] - 6;
     try m68k.memory.write32(sp + 2, m68k.pc + 2);
     try m68k.memory.write16(sp, m68k.sr);
     m68k.a[7] = sp;
     
-    // 벡터 주소로 점프
+    // 벡터 주소�??�프
     m68k.pc = try m68k.memory.read32(vector_addr);
     
-    // Supervisor 모드 설정
+    // Supervisor 모드 ?�정
     m68k.sr |= 0x2000;
     
     return 34;
@@ -901,27 +1091,32 @@ fn executeBcc(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
 }
 
 fn executeJsr(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
-    _ = inst;
+    var cycles: u32 = 16; // Base JSR cycles
+    cycles += getEACycles(inst.dst, .Long, true);
+    
     const return_addr = m68k.pc + 2;
     m68k.a[7] -= 4;
     try m68k.memory.write32(m68k.a[7], return_addr);
     m68k.pc += 2;
-    return 18;
+    return cycles;
 }
 
 fn executeJmp(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
-    // JMP는 JSR과 동일하지만 return address를 push하지 않음
+    // JMP is like JSR but doesn't push return address
+    var cycles: u32 = 8;
+    cycles += getEACycles(inst.dst, .Long, true);
+    
     const target = try calculateEA(m68k, inst.dst);
     m68k.pc = target;
-    return 8;
+    return cycles;
 }
 
 fn executeBsr(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
-    // BSR은 BRA + return address push
+    // BSR?� BRA + return address push
     const displacement = @as(i8, @bitCast(@as(u8, @truncate(inst.opcode & 0xFF))));
     const return_addr = m68k.pc + 2;
     
-    // Return address를 스택에 push
+    // Return address�??�택??push
     m68k.a[7] -= 4;
     try m68k.memory.write32(m68k.a[7], return_addr);
     
@@ -944,24 +1139,24 @@ fn executeDbcc(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     
     const condition: u4 = @truncate((inst.opcode >> 8) & 0xF);
     
-    // 조건이 true이면 루프 종료 (카운터 감소 안함)
+    // If condition is true
     if (evaluateCondition(m68k, condition)) {
         m68k.pc += 4; // opcode + displacement word
         return 12;
     }
     
-    // 조건이 false면 카운터 감소
+    // If condition is false
     const counter: i16 = @bitCast(@as(u16, @truncate(m68k.d[reg])));
     const new_counter = counter -% 1;
     m68k.d[reg] = (m68k.d[reg] & 0xFFFF0000) | @as(u32, @bitCast(@as(i32, new_counter) & 0xFFFF));
     
-    // 카운터가 -1이면 루프 종료
+    // 카운?��? -1?�면 루프 종료
     if (new_counter == -1) {
         m68k.pc += 4;
         return 14;
     }
     
-    // 분기 수행
+    // 분기 ?�행
     const displacement = try m68k.memory.read16(m68k.pc + 2);
     m68k.pc = @intCast(@as(i32, @intCast(m68k.pc)) + 2 + @as(i32, @intCast(@as(i16, @bitCast(displacement)))));
     return 10;
@@ -970,20 +1165,23 @@ fn executeDbcc(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
 fn executeScc(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     const condition: u4 = @truncate((inst.opcode >> 8) & 0xF);
     
-    // 조건 평가
+    // Evaluate condition
     const condition_true = evaluateCondition(m68k, condition);
     
-    // true면 0xFF, false면 0x00
+    var cycles: u32 = if (condition_true) @as(u32, 6) else 4;
+    cycles += getEACycles(inst.dst, .Byte, false);
+    
+    // true = 0xFF, false = 0x00
     const value: u8 = if (condition_true) 0xFF else 0x00;
     
     try setOperandValue(m68k, inst.dst, @as(u32, value), .Byte);
     
     m68k.pc += 2;
-    return 8;
+    return cycles;
 }
 
 // ============================================================================
-// 시프트 및 로테이트 연산
+// ?�프??�?로테?�트 ?�산
 // ============================================================================
 
 fn executeAsl(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
@@ -1299,6 +1497,9 @@ fn getShiftCount(m68k: *cpu.M68k, src: decoder.Operand) !u32 {
 // ============================================================================
 
 fn executeBtst(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    var cycles: u32 = 4;
+    cycles += getEACycles(inst.dst, .Long, true);
+    
     const bit_num = try getBitNumber(m68k, inst.src, inst.dst);
     const value = try getOperandValue(m68k, inst.dst, .Long);
     
@@ -1311,10 +1512,14 @@ fn executeBtst(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
         else => 2,
     };
     m68k.pc += pc_inc;
-    return 4;
+    return cycles;
 }
 
 fn executeBset(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    var cycles: u32 = 8;
+    cycles += getEACycles(inst.dst, .Long, true);
+    cycles += getEACycles(inst.dst, .Long, false);
+    
     const bit_num = try getBitNumber(m68k, inst.src, inst.dst);
     var value = try getOperandValue(m68k, inst.dst, .Long);
     
@@ -1329,10 +1534,14 @@ fn executeBset(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
         else => 2,
     };
     m68k.pc += pc_inc;
-    return 8;
+    return cycles;
 }
 
 fn executeBclr(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    var cycles: u32 = 8;
+    cycles += getEACycles(inst.dst, .Long, true);
+    cycles += getEACycles(inst.dst, .Long, false);
+    
     const bit_num = try getBitNumber(m68k, inst.src, inst.dst);
     var value = try getOperandValue(m68k, inst.dst, .Long);
     
@@ -1347,10 +1556,14 @@ fn executeBclr(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
         else => 2,
     };
     m68k.pc += pc_inc;
-    return 8;
+    return cycles;
 }
 
 fn executeBchg(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    var cycles: u32 = 8;
+    cycles += getEACycles(inst.dst, .Long, true);
+    cycles += getEACycles(inst.dst, .Long, false);
+    
     const bit_num = try getBitNumber(m68k, inst.src, inst.dst);
     var value = try getOperandValue(m68k, inst.dst, .Long);
     
@@ -1365,7 +1578,7 @@ fn executeBchg(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
         else => 2,
     };
     m68k.pc += pc_inc;
-    return 8;
+    return cycles;
 }
 
 fn getBitNumber(m68k: *cpu.M68k, src: decoder.Operand, dst: decoder.Operand) !u32 {
@@ -1432,6 +1645,9 @@ fn executeUnlk(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
 }
 
 fn executePea(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    var cycles: u32 = 12;
+    cycles += getEACycles(inst.src, .Long, true);
+    
     // Calculate effective address
     const ea = try calculateEA(m68k, inst.src);
     
@@ -1440,7 +1656,7 @@ fn executePea(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     try m68k.memory.write32(m68k.a[7], ea);
     
     m68k.pc += 2;
-    return 12;
+    return cycles;
 }
 
 fn executeMovem(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
@@ -1619,6 +1835,11 @@ fn executeCmpm(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     const ay = opcode & 0x7;
     const size = inst.data_size;
     
+    const cycles: u32 = switch (size) {
+        .Byte, .Word => 12,
+        .Long => 20,
+    };
+    
     const bytes: u32 = switch (size) {
         .Byte => 1,
         .Word => 2,
@@ -1646,7 +1867,7 @@ fn executeCmpm(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     setArithmeticFlags(m68k, dst_val, src_val, result, size, true);
     
     m68k.pc += 2;
-    return 12;
+    return cycles;
 }
 
 fn executeChk(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
@@ -1655,6 +1876,9 @@ fn executeChk(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
         .DataReg => |r| r,
         else => return error.InvalidOperand,
     };
+    
+    var cycles: u32 = 10; // Base cycles
+    cycles += getEACycles(inst.src, .Word, true);
     
     const bound = try getOperandValue(m68k, inst.src, .Word);
     const value = m68k.d[reg] & 0xFFFF;
@@ -1681,15 +1905,19 @@ fn executeChk(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
         m68k.pc = try m68k.memory.read32(vector_addr);
         m68k.sr |= 0x2000; // Supervisor mode
         
-        return 40;
+        return cycles + 34; // Exception overhead
     }
     
     m68k.pc += 2;
-    return 10;
+    return cycles;
 }
 
 fn executeTas(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     // TAS: Test and Set
+    var cycles: u32 = 14;
+    cycles += getEACycles(inst.dst, .Byte, true);
+    cycles += getEACycles(inst.dst, .Byte, false);
+    
     const addr = try calculateEA(m68k, inst.dst);
     
     // Read byte
@@ -1702,39 +1930,55 @@ fn executeTas(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     try m68k.memory.write8(addr, value | 0x80);
     
     m68k.pc += 2;
-    return 14;
+    return cycles;
 }
 
 fn executeAbcd(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     // ABCD: Add BCD with extend
+    var cycles: u32 = 6;
+    cycles += getEACycles(inst.src, .Byte, true);
+    cycles += getEACycles(inst.dst, .Byte, true);
+    cycles += getEACycles(inst.dst, .Byte, false);
+    
     // TODO: Implement BCD addition logic
-    _ = inst;
     m68k.pc += 2;
-    return 6;
+    return cycles;
 }
 
 fn executeSbcd(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     // SBCD: Subtract BCD with extend
+    var cycles: u32 = 6;
+    cycles += getEACycles(inst.src, .Byte, true);
+    cycles += getEACycles(inst.dst, .Byte, true);
+    cycles += getEACycles(inst.dst, .Byte, false);
+    
     // TODO: Implement BCD subtraction logic
-    _ = inst;
     m68k.pc += 2;
-    return 6;
+    return cycles;
 }
 
 fn executeNbcd(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     // NBCD: Negate BCD with extend
+    var cycles: u32 = 6;
+    cycles += getEACycles(inst.dst, .Byte, true);
+    cycles += getEACycles(inst.dst, .Byte, false);
+    
     // TODO: Implement BCD negation logic
-    _ = inst;
     m68k.pc += 2;
-    return 6;
+    return cycles;
 }
 
 fn executeMovep(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     // MOVEP: Move Peripheral Data
+    const cycles: u32 = switch (inst.data_size) {
+        .Word => 16,
+        .Long => 24,
+        else => 16,
+    };
+    
     // TODO: Implement MOVEP logic
-    _ = inst;
     m68k.pc += 2;
-    return 16;
+    return cycles;
 }
 
 // ============================================================================
@@ -1880,7 +2124,7 @@ fn calculateEA(m68k: *cpu.M68k, operand: decoder.Operand) !u32 {
                 addr = m68k.a[reg];
             } else if (info.is_pc_relative) {
                 // PC relative base (usually current opcode PC + 2)
-                // 디코더에서 bd를 계산할 때 이미 조정되었을 수 있으나, 사양에 따라 처리
+                // ?�코?�에??bd�?계산?????��? 조정?�었?????�으?? ?�양???�라 처리
                 addr = m68k.pc; 
             }
             
@@ -1999,7 +2243,7 @@ fn executeMovec(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     const control_reg = inst.control_reg orelse return error.InvalidInstruction;
     
     if (inst.is_to_control) {
-        // Rc ← Rn (레지스터 → 컨트롤 레지스터)
+        // Rc ??Rn (?��??�터 ??컨트�??��??�터)
         const value = switch (inst.src) {
             .DataReg => |reg| m68k.d[reg],
             .AddrReg => |reg| m68k.a[reg],
@@ -2007,16 +2251,16 @@ fn executeMovec(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
         };
         
         switch (control_reg) {
-            0x000 => {},  // SFC (Source Function Code) - 미구현
-            0x001 => {},  // DFC (Destination Function Code) - 미구현
+            0x000 => {},  // SFC (Source Function Code) - 미구??
+            0x001 => {},  // DFC (Destination Function Code) - 미구??
             0x002 => m68k.cacr = value,  // CACR (Cache Control Register)
-            0x800 => {},  // USP (User Stack Pointer) - 미구현
+            0x800 => {},  // USP (User Stack Pointer) - 미구??
             0x801 => m68k.vbr = value,   // VBR (Vector Base Register)
             0x802 => m68k.caar = value,  // CAAR (Cache Address Register)
             else => return error.InvalidControlRegister,
         }
     } else {
-        // Rn ← Rc (컨트롤 레지스터 → 레지스터)
+        // Rn ??Rc (컨트�??��??�터 ???��??�터)
         const value: u32 = switch (control_reg) {
             0x000 => 0,  // SFC
             0x001 => 0,  // DFC
@@ -2035,7 +2279,7 @@ fn executeMovec(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
     }
     
     m68k.pc += inst.size;
-    return 12;  // 68020: 12 사이클
+    return 12;  // 68020: 12 ?�이??
 }
 
 test "Executor NOP" {
@@ -2052,4 +2296,979 @@ test "Executor NOP" {
     
     try std.testing.expectEqual(@as(u32, 4), cycles);
     try std.testing.expectEqual(initial_pc + 2, m68k.pc);
+}
+
+// ============================================================================
+// Cycle-Accurate Helpers
+// ============================================================================
+
+// EA (Effective Address) calculation cycle costs
+fn getEACycles(operand: decoder.Operand, size: decoder.DataSize, is_read: bool) u32 {
+    _ = is_read; // For future use (read vs write may have different costs)
+    
+    return switch (operand) {
+        // Register direct: 0 cycles (already in register)
+        .DataReg, .AddrReg => 0,
+        
+        // Immediate: 4 cycles (word), 8 cycles (long)
+        .Immediate8, .Immediate16 => 4,
+        .Immediate32 => 8,
+        
+        // Simple memory access
+        .AddrIndirect => 4,              // (An)
+        .AddrPostInc => 4,               // (An)+
+        .AddrPreDec => 6,                // -(An) - 2 extra for predec
+        
+        // With displacement
+        .AddrDisplace => 8,              // d16(An)
+        
+        // Absolute
+        .Address => if (size == .Long) 12 else 8,  // xxx.W or xxx.L
+        
+        // Bit field (68020)
+        .BitField => 8,
+        
+        // Complex EA (68020)
+        .ComplexEA => |info| blk: {
+            var cycles: u32 = 8; // Base cost
+            
+            // Index register adds cycles
+            if (info.index_reg != null) cycles += 2;
+            
+            // Memory indirect adds cycles
+            if (info.is_mem_indirect) cycles += 4;
+            
+            // Post-indexed adds extra cycle
+            if (info.is_post_indexed) cycles += 2;
+            
+            break :blk cycles;
+        },
+        
+        .None => 0,
+    };
+}
+
+// Base instruction cycle table (68000)
+// These are minimum execution cycles, not including EA calculation
+const InstructionCycles = struct {
+    pub fn get(mnemonic: decoder.Mnemonic, size: decoder.DataSize, has_mem_dst: bool) u32 {
+        return switch (mnemonic) {
+            // Data movement (4-12 cycles)
+            .MOVE => if (has_mem_dst) 8 else 4,
+            .MOVEA => 4,
+            .MOVEQ => 4,
+            .LEA => 4,
+            .PEA => 12,
+            
+            // Arithmetic (4-12 cycles base)
+            .ADD, .SUB => switch (size) {
+                .Byte, .Word => if (has_mem_dst) 8 else 4,
+                .Long => if (has_mem_dst) 12 else 6,
+            },
+            .ADDA, .SUBA => if (size == .Long) 8 else 8,
+            .ADDI, .SUBI => switch (size) {
+                .Byte, .Word => if (has_mem_dst) 12 else 8,
+                .Long => if (has_mem_dst) 20 else 16,
+            },
+            .ADDQ, .SUBQ => if (has_mem_dst) 8 else 4,
+            .ADDX, .SUBX => switch (size) {
+                .Byte, .Word => 4,
+                .Long => 8,
+            },
+            
+            // Multiply/Divide (heavy operations)
+            .MULU => 38,  // + (2 * number of ones in multiplier)
+            .MULS => 38,  // + (2 * number of ones in multiplier)
+            .DIVU => 76,  // Worst case: 140 cycles
+            .DIVS => 76,  // Worst case: 158 cycles
+            
+            // Logical (4-8 cycles)
+            .AND, .OR, .EOR => if (has_mem_dst) 8 else 4,
+            .ANDI, .ORI, .EORI => if (has_mem_dst) 12 else 8,
+            .NOT => if (size == .Long) 6 else 4,
+            
+            // Compare (4-6 cycles)
+            .CMP => 4,
+            .CMPA => 6,
+            .CMPI => if (size == .Long) 14 else 8,
+            .CMPM => if (size == .Long) 20 else 12,
+            .TST => 4,
+            
+            // Shift/Rotate (6 + 2*count cycles)
+            .ASL, .ASR, .LSL, .LSR, .ROL, .ROR, .ROXL, .ROXR => 6,
+            
+            // Bit operations (4-12 cycles)
+            .BTST => 4,
+            .BSET, .BCLR, .BCHG => if (has_mem_dst) 8 else 8,
+            
+            // Negation (4-12 cycles)
+            .NEG, .NEGX => switch (size) {
+                .Byte, .Word => if (has_mem_dst) 8 else 4,
+                .Long => if (has_mem_dst) 12 else 6,
+            },
+            .CLR => if (size == .Long) 6 else 4,
+            
+            // Extension
+            .EXT => 4,
+            .EXTB => 4,  // 68020: byte to long extension
+            .SWAP => 4,
+            
+            // Program control
+            .BRA => 10,
+            .Bcc => 10,  // Taken: 10, Not taken: 8
+            .BSR => 18,
+            .JMP => 8,   // + EA cycles
+            .JSR => 16,  // + EA cycles
+            .RTS => 16,
+            .RTR => 20,
+            .RTE => 20,
+            .DBcc => 10, // Not expired: 10, Expired: 14
+            .Scc => 4,   // True: 6, False: 4
+            
+            // Trap/Exception
+            .TRAP => 38,
+            .TRAPV => 4, // No trap: 4, Trap: 38
+            .CHK => 10,  // No trap: 10, Trap: 44+
+            
+            // Stack
+            .LINK => 16,
+            .UNLK => 12,
+            
+            // Special
+            .TAS => 14,
+            .NOP => 4,
+            .ILLEGAL => 38,
+            
+            // BCD (18 cycles register, 30 cycles memory)
+            .ABCD, .SBCD => if (has_mem_dst) 30 else 18,
+            .NBCD => 8,
+            
+            // Data transfer
+            .MOVEM => 12, // Base + 4/8 per register
+            .EXG => 6,
+            
+            // 68020 exclusive
+            .BFTST => 10,
+            .BFSET, .BFCLR => 12,
+            .BFEXTS, .BFEXTU => 10,
+            .BFINS => 12,
+            .BFFFO => 10,
+            .CAS => 16,
+            .CAS2 => 24,
+            
+            // 68020 Phase 2
+            .RTD => 16,
+            .BKPT => 10,
+            .TRAPcc => 4,
+            .CHK2 => 18,
+            .CMP2 => 14,
+            .PACK => 6,
+            .UNPK => 8,
+            .MULS_L => 43,
+            .MULU_L => 43,
+            .DIVS_L => 90,
+            .DIVU_L => 90,
+            
+            .MOVEP => 16,
+            else => 4, // Default fallback
+        };
+    }
+};
+
+
+
+// ============================================================================
+// 68020 Exclusive Instructions
+// ============================================================================
+
+fn executeBftst(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // BFTST <ea>{offset:width}
+    // Test bit field and set Z flag
+    const ext_word = try m68k.memory.read16(m68k.pc + 2);
+    
+    const offset = @as(u6, @truncate((ext_word >> 6) & 0x1F));
+    var width = @as(u6, @truncate(ext_word & 0x1F));
+    if (width == 0) width = 32; // width 0 means 32
+    
+    // Get EA value
+    const value = try getOperandValue(m68k, inst.dst, .Long);
+    
+    // Extract bit field
+    const mask = (@as(u32, 1) << width) - 1;
+    const field = (value >> (32 - @as(u32, offset) - @as(u32, width))) & mask;
+    
+    // Set flags
+    m68k.setFlag(cpu.M68k.FLAG_Z, field == 0);
+    m68k.setFlag(cpu.M68k.FLAG_N, (field & (@as(u32, 1) << (width - 1))) != 0);
+    m68k.setFlag(cpu.M68k.FLAG_V, false);
+    m68k.setFlag(cpu.M68k.FLAG_C, false);
+    
+    m68k.pc += 4;
+    return 10;
+}
+
+fn executeBfextu(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // BFEXTU <ea>{offset:width}, Dn
+    // Extract unsigned bit field to data register
+    const ext_word = try m68k.memory.read16(m68k.pc + 2);
+    
+    const dn = @as(u3, @truncate((ext_word >> 12) & 0x7));
+    const offset = @as(u6, @truncate((ext_word >> 6) & 0x1F));
+    var width = @as(u6, @truncate(ext_word & 0x1F));
+    if (width == 0) width = 32;
+    
+    // Get EA value
+    const value = try getOperandValue(m68k, inst.src, .Long);
+    
+    // Extract bit field (unsigned)
+    const mask = (@as(u32, 1) << width) - 1;
+    const field = (value >> (32 - @as(u32, offset) - @as(u32, width))) & mask;
+    
+    // Store in Dn
+    m68k.d[dn] = field;
+    
+    // Set flags
+    m68k.setFlag(cpu.M68k.FLAG_Z, field == 0);
+    m68k.setFlag(cpu.M68k.FLAG_N, false); // Unsigned, so always positive
+    m68k.setFlag(cpu.M68k.FLAG_V, false);
+    m68k.setFlag(cpu.M68k.FLAG_C, false);
+    
+    m68k.pc += 4;
+    return 10;
+}
+
+fn executeBfexts(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // BFEXTS <ea>{offset:width}, Dn
+    // Extract signed bit field to data register
+    const ext_word = try m68k.memory.read16(m68k.pc + 2);
+    
+    const dn = @as(u3, @truncate((ext_word >> 12) & 0x7));
+    const offset = @as(u6, @truncate((ext_word >> 6) & 0x1F));
+    var width = @as(u6, @truncate(ext_word & 0x1F));
+    if (width == 0) width = 32;
+    
+    // Get EA value
+    const value = try getOperandValue(m68k, inst.src, .Long);
+    
+    // Extract bit field
+    const mask = (@as(u32, 1) << width) - 1;
+    const field = (value >> (32 - @as(u32, offset) - @as(u32, width))) & mask;
+    
+    // Sign extend
+    const sign_bit = @as(u32, 1) << (width - 1);
+    const extended = if ((field & sign_bit) != 0)
+        field | (~mask)  // Extend with 1s
+    else
+        field;  // Already positive
+    
+    // Store in Dn
+    m68k.d[dn] = extended;
+    
+    // Set flags
+    m68k.setFlag(cpu.M68k.FLAG_Z, field == 0);
+    m68k.setFlag(cpu.M68k.FLAG_N, (field & sign_bit) != 0);
+    m68k.setFlag(cpu.M68k.FLAG_V, false);
+    m68k.setFlag(cpu.M68k.FLAG_C, false);
+    
+    m68k.pc += 4;
+    return 10;
+}
+
+fn executeBfset(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // BFSET <ea>{offset:width}
+    // Set all bits in bit field to 1
+    const ext_word = try m68k.memory.read16(m68k.pc + 2);
+    
+    const offset = @as(u6, @truncate((ext_word >> 6) & 0x1F));
+    var width = @as(u6, @truncate(ext_word & 0x1F));
+    if (width == 0) width = 32;
+    
+    // Get EA value
+    const value = try getOperandValue(m68k, inst.dst, .Long);
+    
+    // Create mask for bit field
+    const mask = (@as(u32, 1) << width) - 1;
+    const shift = 32 - offset - width;
+    const field_mask = mask << shift;
+    
+    // Set bits
+    const new_value = value | field_mask;
+    try setOperandValue(m68k, inst.dst, new_value, .Long);
+    
+    // Set flags (based on OLD value)
+    const field = (value >> shift) & mask;
+    m68k.setFlag(cpu.M68k.FLAG_Z, field == 0);
+    m68k.setFlag(cpu.M68k.FLAG_N, (field & (@as(u32, 1) << (width - 1))) != 0);
+    m68k.setFlag(cpu.M68k.FLAG_V, false);
+    m68k.setFlag(cpu.M68k.FLAG_C, false);
+    
+    m68k.pc += 4;
+    return 12;
+}
+
+fn executeBfclr(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // BFCLR <ea>{offset:width}
+    // Clear all bits in bit field to 0
+    const ext_word = try m68k.memory.read16(m68k.pc + 2);
+    
+    const offset = @as(u6, @truncate((ext_word >> 6) & 0x1F));
+    var width = @as(u6, @truncate(ext_word & 0x1F));
+    if (width == 0) width = 32;
+    
+    // Get EA value
+    const value = try getOperandValue(m68k, inst.dst, .Long);
+    
+    // Create mask for bit field
+    const mask = (@as(u32, 1) << width) - 1;
+    const shift = 32 - offset - width;
+    const field_mask = mask << shift;
+    
+    // Clear bits
+    const new_value = value & ~field_mask;
+    try setOperandValue(m68k, inst.dst, new_value, .Long);
+    
+    // Set flags (based on OLD value)
+    const field = (value >> shift) & mask;
+    m68k.setFlag(cpu.M68k.FLAG_Z, field == 0);
+    m68k.setFlag(cpu.M68k.FLAG_N, (field & (@as(u32, 1) << (width - 1))) != 0);
+    m68k.setFlag(cpu.M68k.FLAG_V, false);
+    m68k.setFlag(cpu.M68k.FLAG_C, false);
+    
+    m68k.pc += 4;
+    return 12;
+}
+
+fn executeBfins(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // BFINS Dn, <ea>{offset:width}
+    // Insert low bits of Dn into bit field
+    const ext_word = try m68k.memory.read16(m68k.pc + 2);
+    
+    const dn = @as(u3, @truncate((ext_word >> 12) & 0x7));
+    const offset = @as(u6, @truncate((ext_word >> 6) & 0x1F));
+    var width = @as(u6, @truncate(ext_word & 0x1F));
+    if (width == 0) width = 32;
+    
+    // Get source value from Dn
+    const src = m68k.d[dn];
+    
+    // Get EA value
+    const value = try getOperandValue(m68k, inst.dst, .Long);
+    
+    // Create masks
+    const mask = (@as(u32, 1) << width) - 1;
+    const shift = 32 - offset - width;
+    const field_mask = mask << shift;
+    
+    // Insert bits
+    const new_value = (value & ~field_mask) | ((src & mask) << shift);
+    try setOperandValue(m68k, inst.dst, new_value, .Long);
+    
+    // Set flags (based on inserted value)
+    const field = src & mask;
+    m68k.setFlag(cpu.M68k.FLAG_Z, field == 0);
+    m68k.setFlag(cpu.M68k.FLAG_N, (field & (@as(u32, 1) << (width - 1))) != 0);
+    m68k.setFlag(cpu.M68k.FLAG_V, false);
+    m68k.setFlag(cpu.M68k.FLAG_C, false);
+    
+    m68k.pc += 4;
+    return 12;
+}
+
+fn executeBfffo(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // BFFFO <ea>{offset:width}, Dn
+    // Find first one in bit field
+    const ext_word = try m68k.memory.read16(m68k.pc + 2);
+    
+    const dn = @as(u3, @truncate((ext_word >> 12) & 0x7));
+    const offset = @as(u6, @truncate((ext_word >> 6) & 0x1F));
+    var width = @as(u6, @truncate(ext_word & 0x1F));
+    if (width == 0) width = 32;
+    
+    // Get EA value
+    const value = try getOperandValue(m68k, inst.src, .Long);
+    
+    // Extract bit field
+    const mask = (@as(u32, 1) << width) - 1;
+    const shift = 32 - offset - width;
+    const field = (value >> shift) & mask;
+    
+    // Find first one
+    var first_one: u32 = offset + width;  // Default: not found
+    var i: u5 = 0;
+    while (i < width) : (i += 1) {
+        if ((field & (@as(u32, 1) << (width - 1 - i))) != 0) {
+            first_one = offset + i;
+            break;
+        }
+    }
+    
+    // Store result in Dn
+    m68k.d[dn] = first_one;
+    
+    // Set flags
+    m68k.setFlag(cpu.M68k.FLAG_Z, field == 0);
+    m68k.setFlag(cpu.M68k.FLAG_N, (field & (@as(u32, 1) << (width - 1))) != 0);
+    m68k.setFlag(cpu.M68k.FLAG_V, false);
+    m68k.setFlag(cpu.M68k.FLAG_C, false);
+    
+    m68k.pc += 4;
+    return 10;
+}
+
+fn executeCas(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // CAS Dc, Du, <ea>
+    // Compare and Swap (atomic)
+    const ext_word = try m68k.memory.read16(m68k.pc + 2);
+    
+    const dc = @as(u3, @truncate(ext_word & 0x7));  // Compare register
+    const du = @as(u3, @truncate((ext_word >> 6) & 0x7));  // Update register
+    
+    // Get operand value from memory
+    const mem_value = try getOperandValue(m68k, inst.dst, inst.data_size);
+    const compare_value = getRegisterValue(m68k.d[dc], inst.data_size);
+    
+    // Compare
+    if (mem_value == compare_value) {
+        // Equal: write Du to memory
+        const update_value = getRegisterValue(m68k.d[du], inst.data_size);
+        try setOperandValue(m68k, inst.dst, update_value, inst.data_size);
+        m68k.setFlag(cpu.M68k.FLAG_Z, true);
+    } else {
+        // Not equal: load memory to Dc
+        setRegisterValue(&m68k.d[dc], mem_value, inst.data_size);
+        m68k.setFlag(cpu.M68k.FLAG_Z, false);
+    }
+    
+    // Set other flags
+    const result = mem_value -% compare_value;
+    setArithmeticFlags(m68k, mem_value, compare_value, result, inst.data_size, true);
+    
+    m68k.pc += 4;
+    return 16;
+}
+
+fn executeCas2(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // CAS2 Dc1:Dc2, Du1:Du2, (Rn1):(Rn2)
+    // Dual Compare and Swap
+    // This is very complex - stub implementation
+    _ = inst;
+    
+    m68k.pc += 6;  // opcode + 2 extension words
+    return 24;
+}
+
+
+// RTD - Return and Deallocate
+fn executeRtd(m68k: *cpu.M68k, _: *const decoder.Instruction) !u32 {
+    // RTD #displacement
+    // Pop return address, then add displacement to SP
+    
+    // Read displacement from extension word
+    const displacement = try m68k.memory.read16(m68k.pc + 2);
+    const disp_signed: i16 = @bitCast(displacement);
+    
+    // Pop return address from stack
+    const sp = m68k.a[7];
+    m68k.pc = try m68k.memory.read32(sp);
+    
+    // Deallocate stack: SP = SP + 4 + displacement
+    m68k.a[7] = @intCast(@as(i32, @intCast(sp)) + 4 + @as(i32, disp_signed));
+    
+    return 16; // RTD takes 16 cycles
+}
+
+// BKPT - Breakpoint
+fn executeBkpt(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // BKPT #vector
+    // Breakpoint for debugging
+    
+    const vector = inst.opcode & 0x7; // 3-bit vector (0-7)
+    
+    // In a real implementation, this would trigger a breakpoint exception
+    // For now, we'll treat it as a special trap
+    
+    // Save PC and SR
+    const sp = m68k.a[7] - 6;
+    try m68k.memory.write32(sp + 2, m68k.pc + 2);
+    try m68k.memory.write16(sp, m68k.sr);
+    m68k.a[7] = sp;
+    
+    // Jump to exception vector (offset 12 + vector)
+    const vector_addr = m68k.getExceptionVector(@intCast(12 + vector));
+    m68k.pc = try m68k.memory.read32(vector_addr);
+    
+    m68k.sr |= 0x2000; // Supervisor mode
+    
+    return 10; // BKPT base cycles
+}
+
+// TRAPcc - Trap on Condition
+fn executeTrapcc(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // TRAPcc / TRAPcc.W #data / TRAPcc.L #data
+    
+    const condition: u4 = @truncate((inst.opcode >> 8) & 0xF);
+    const opmode = inst.opcode & 0x7; // 010=word, 011=long, 100=no operand
+    
+    var cycles: u32 = 4;
+    var pc_inc: u32 = 2;
+    
+    // Read immediate data if present
+    if (opmode == 2) { // .W
+        pc_inc = 4;
+        cycles += 2;
+    } else if (opmode == 3) { // .L
+        pc_inc = 6;
+        cycles += 4;
+    }
+    
+    // Evaluate condition
+    if (evaluateCondition(m68k, condition)) {
+        // Condition true - take trap
+        const sp = m68k.a[7] - 6;
+        try m68k.memory.write32(sp + 2, m68k.pc + pc_inc);
+        try m68k.memory.write16(sp, m68k.sr);
+        m68k.a[7] = sp;
+        
+        // TRAPcc uses vector 7
+        const vector_addr = m68k.getExceptionVector(7);
+        m68k.pc = try m68k.memory.read32(vector_addr);
+        m68k.sr |= 0x2000; // Supervisor mode
+        
+        return cycles + 30; // Exception overhead
+    }
+    
+    // Condition false - no trap
+    m68k.pc += pc_inc;
+    return cycles;
+}
+
+// CHK2 - Check Register Against Bounds (Range Check)
+fn executeChk2(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // CHK2 <ea>, Rn
+    // Check if Rn is within bounds [lower, upper]
+    
+    var cycles: u32 = 18;
+    cycles += getEACycles(inst.src, inst.data_size, true);
+    
+    const ext_word = try m68k.memory.read16(m68k.pc + 2);
+    const rn = @as(u3, @truncate((ext_word >> 12) & 0x7));
+    const is_addr = (ext_word & 0x8000) != 0;
+    
+    // Get register value
+    const reg_value = if (is_addr) m68k.a[rn] else m68k.d[rn];
+    
+    // Get bounds from memory (two consecutive values)
+    const ea_addr = try calculateEA(m68k, inst.src);
+    
+    const lower = switch (inst.data_size) {
+        .Byte => @as(u32, try m68k.memory.read8(ea_addr)),
+        .Word => @as(u32, try m68k.memory.read16(ea_addr)),
+        .Long => try m68k.memory.read32(ea_addr),
+    };
+    
+    const upper = switch (inst.data_size) {
+        .Byte => @as(u32, try m68k.memory.read8(ea_addr + 1)),
+        .Word => @as(u32, try m68k.memory.read16(ea_addr + 2)),
+        .Long => try m68k.memory.read32(ea_addr + 4),
+    };
+    
+    // Check bounds
+    const masked_value = switch (inst.data_size) {
+        .Byte => reg_value & 0xFF,
+        .Word => reg_value & 0xFFFF,
+        .Long => reg_value,
+    };
+    
+    if (masked_value < lower or masked_value > upper) {
+        // Out of bounds - CHK exception
+        const sp = m68k.a[7] - 6;
+        try m68k.memory.write32(sp + 2, m68k.pc + 4);
+        try m68k.memory.write16(sp, m68k.sr);
+        m68k.a[7] = sp;
+        
+        const vector_addr = m68k.getExceptionVector(6);
+        m68k.pc = try m68k.memory.read32(vector_addr);
+        m68k.sr |= 0x2000;
+        
+        return cycles + 30;
+    }
+    
+    // Set C flag if value == lower or upper
+    m68k.setFlag(cpu.M68k.FLAG_C, masked_value == lower or masked_value == upper);
+    
+    m68k.pc += 4;
+    return cycles;
+}
+
+// CMP2 - Compare Register Against Bounds
+fn executeCmp2(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // CMP2 <ea>, Rn
+    // Similar to CHK2 but doesn't trap, just sets flags
+    
+    var cycles: u32 = 14;
+    cycles += getEACycles(inst.src, inst.data_size, true);
+    
+    const ext_word = try m68k.memory.read16(m68k.pc + 2);
+    const rn = @as(u3, @truncate((ext_word >> 12) & 0x7));
+    const is_addr = (ext_word & 0x8000) != 0;
+    
+    const reg_value = if (is_addr) m68k.a[rn] else m68k.d[rn];
+    
+    const ea_addr = try calculateEA(m68k, inst.src);
+    
+    const lower = switch (inst.data_size) {
+        .Byte => @as(u32, try m68k.memory.read8(ea_addr)),
+        .Word => @as(u32, try m68k.memory.read16(ea_addr)),
+        .Long => try m68k.memory.read32(ea_addr),
+    };
+    
+    const upper = switch (inst.data_size) {
+        .Byte => @as(u32, try m68k.memory.read8(ea_addr + 1)),
+        .Word => @as(u32, try m68k.memory.read16(ea_addr + 2)),
+        .Long => try m68k.memory.read32(ea_addr + 4),
+    };
+    
+    const masked_value = switch (inst.data_size) {
+        .Byte => reg_value & 0xFF,
+        .Word => reg_value & 0xFFFF,
+        .Long => reg_value,
+    };
+    
+    // Set flags
+    const in_bounds = masked_value >= lower and masked_value <= upper;
+    m68k.setFlag(cpu.M68k.FLAG_Z, in_bounds);
+    m68k.setFlag(cpu.M68k.FLAG_C, masked_value == lower or masked_value == upper);
+    
+    m68k.pc += 4;
+    return cycles;
+}
+
+// PACK - Pack BCD
+fn executePack(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // PACK -(Ax), -(Ay), #adjustment
+    // or PACK Dx, Dy, #adjustment
+    
+    const adjustment = try m68k.memory.read16(m68k.pc + 2);
+    
+    const src_reg = switch (inst.src) {
+        .DataReg => |r| r,
+        .AddrPreDec => |r| r,
+        else => return error.InvalidOperand,
+    };
+    
+    const dst_reg = switch (inst.dst) {
+        .DataReg => |r| r,
+        .AddrPreDec => |r| r,
+        else => return error.InvalidOperand,
+    };
+    
+    var cycles: u32 = 6;
+    
+    switch (inst.src) {
+        .DataReg => {
+            // Register to register
+            const src_value = m68k.d[src_reg] & 0xFFFF;
+            const adjusted = src_value +% adjustment;
+            
+            // Pack: take low nibble and high nibble
+            const low_nibble = adjusted & 0x0F;
+            const high_nibble = (adjusted >> 8) & 0x0F;
+            const packed_value = (high_nibble << 4) | low_nibble;
+            
+            m68k.d[dst_reg] = (m68k.d[dst_reg] & 0xFFFFFF00) | packed_value;
+        },
+        .AddrPreDec => {
+            // Memory to memory
+            cycles += 8;
+            
+            // Read source (2 bytes)
+            m68k.a[src_reg] -= 2;
+            const src_value = try m68k.memory.read16(m68k.a[src_reg]);
+            const adjusted = src_value +% adjustment;
+            
+            // Pack
+            const low_nibble = adjusted & 0x0F;
+            const high_nibble = (adjusted >> 8) & 0x0F;
+            const packed_value: u8 = @truncate((high_nibble << 4) | low_nibble);
+            
+            // Write destination (1 byte)
+            m68k.a[dst_reg] -= 1;
+            try m68k.memory.write8(m68k.a[dst_reg], packed_value);
+        },
+        else => return error.InvalidOperand,
+    }
+    
+    m68k.pc += 4;
+    return cycles;
+}
+
+// UNPK - Unpack BCD
+fn executeUnpk(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // UNPK -(Ax), -(Ay), #adjustment
+    // or UNPK Dx, Dy, #adjustment
+    
+    const adjustment = try m68k.memory.read16(m68k.pc + 2);
+    
+    const src_reg = switch (inst.src) {
+        .DataReg => |r| r,
+        .AddrPreDec => |r| r,
+        else => return error.InvalidOperand,
+    };
+    
+    const dst_reg = switch (inst.dst) {
+        .DataReg => |r| r,
+        .AddrPreDec => |r| r,
+        else => return error.InvalidOperand,
+    };
+    
+    var cycles: u32 = 8;
+    
+    switch (inst.src) {
+        .DataReg => {
+            // Register to register
+            const packed_value = m68k.d[src_reg] & 0xFF;
+            
+            // Unpack: split nibbles
+            const low_nibble = packed_value & 0x0F;
+            const high_nibble = (packed_value >> 4) & 0x0F;
+            const unpacked: u16 = @intCast((high_nibble << 8) | low_nibble);
+            
+            const result = unpacked +% adjustment;
+            m68k.d[dst_reg] = (m68k.d[dst_reg] & 0xFFFF0000) | result;
+        },
+        .AddrPreDec => {
+            // Memory to memory
+            cycles += 5;
+            
+            // Read source (1 byte)
+            m68k.a[src_reg] -= 1;
+            const packed_value = try m68k.memory.read8(m68k.a[src_reg]);
+            
+            // Unpack
+            const low_nibble = packed_value & 0x0F;
+            const high_nibble = (packed_value >> 4) & 0x0F;
+            const unpacked: u16 = @intCast((high_nibble << 8) | low_nibble);
+            
+            const result = unpacked +% adjustment;
+            
+            // Write destination (2 bytes)
+            m68k.a[dst_reg] -= 2;
+            try m68k.memory.write16(m68k.a[dst_reg], result);
+        },
+        else => return error.InvalidOperand,
+    }
+    
+    m68k.pc += 4;
+    return cycles;
+}
+
+
+// MULS.L - Multiply Signed 32x32 -> 64
+fn executeMulsL(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // MULS.L <ea>, Dl (32x32->32)
+    // MULS.L <ea>, Dh:Dl (32x32->64)
+    
+    var cycles: u32 = 43;
+    cycles += getEACycles(inst.src, .Long, true);
+    
+    const ext_word = try m68k.memory.read16(m68k.pc + 2);
+    const dl = @as(u3, @truncate(ext_word & 0x7)); // Low result register
+    const dh = @as(u3, @truncate((ext_word >> 12) & 0x7)); // High result register
+    const is_64bit = (ext_word & 0x0400) != 0; // Dh:Dl format
+    
+    const src_value: i32 = @bitCast(try getOperandValue(m68k, inst.src, .Long));
+    const dst_value: i32 = @bitCast(m68k.d[dl]);
+    
+    if (is_64bit) {
+        // 64-bit result
+        const result: i64 = @as(i64, src_value) * @as(i64, dst_value);
+        m68k.d[dl] = @bitCast(@as(i32, @truncate(result))); // Low 32 bits
+        m68k.d[dh] = @bitCast(@as(i32, @truncate(result >> 32))); // High 32 bits
+        
+        // Set flags based on 64-bit result
+        m68k.setFlag(cpu.M68k.FLAG_N, result < 0);
+        m68k.setFlag(cpu.M68k.FLAG_Z, result == 0);
+        m68k.setFlag(cpu.M68k.FLAG_V, false);
+        m68k.setFlag(cpu.M68k.FLAG_C, false);
+    } else {
+        // 32-bit result (overflow if doesn't fit)
+        const result: i64 = @as(i64, src_value) * @as(i64, dst_value);
+        const result32: i32 = @truncate(result);
+        m68k.d[dl] = @bitCast(result32);
+        
+        // Check overflow
+        const overflow = (result < -2147483648 or result > 2147483647);
+        
+        m68k.setFlag(cpu.M68k.FLAG_N, result32 < 0);
+        m68k.setFlag(cpu.M68k.FLAG_Z, result32 == 0);
+        m68k.setFlag(cpu.M68k.FLAG_V, overflow);
+        m68k.setFlag(cpu.M68k.FLAG_C, false);
+    }
+    
+    m68k.pc += 4;
+    return cycles;
+}
+
+// MULU.L - Multiply Unsigned 32x32 -> 64
+fn executeMuluL(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // MULU.L <ea>, Dl (32x32->32)
+    // MULU.L <ea>, Dh:Dl (32x32->64)
+    
+    var cycles: u32 = 43;
+    cycles += getEACycles(inst.src, .Long, true);
+    
+    const ext_word = try m68k.memory.read16(m68k.pc + 2);
+    const dl = @as(u3, @truncate(ext_word & 0x7));
+    const dh = @as(u3, @truncate((ext_word >> 12) & 0x7));
+    const is_64bit = (ext_word & 0x0400) != 0;
+    
+    const src_value: u32 = try getOperandValue(m68k, inst.src, .Long);
+    const dst_value: u32 = m68k.d[dl];
+    
+    if (is_64bit) {
+        // 64-bit result
+        const result: u64 = @as(u64, src_value) * @as(u64, dst_value);
+        m68k.d[dl] = @truncate(result); // Low 32 bits
+        m68k.d[dh] = @truncate(result >> 32); // High 32 bits
+        
+        m68k.setFlag(cpu.M68k.FLAG_N, (result & 0x8000000000000000) != 0);
+        m68k.setFlag(cpu.M68k.FLAG_Z, result == 0);
+        m68k.setFlag(cpu.M68k.FLAG_V, false);
+        m68k.setFlag(cpu.M68k.FLAG_C, false);
+    } else {
+        // 32-bit result
+        const result: u64 = @as(u64, src_value) * @as(u64, dst_value);
+        const result32: u32 = @truncate(result);
+        m68k.d[dl] = result32;
+        
+        const overflow = (result > 0xFFFFFFFF);
+        
+        m68k.setFlag(cpu.M68k.FLAG_N, (result32 & 0x80000000) != 0);
+        m68k.setFlag(cpu.M68k.FLAG_Z, result32 == 0);
+        m68k.setFlag(cpu.M68k.FLAG_V, overflow);
+        m68k.setFlag(cpu.M68k.FLAG_C, false);
+    }
+    
+    m68k.pc += 4;
+    return cycles;
+}
+
+// DIVS.L - Divide Signed 64/32 -> 32q:32r
+fn executeDivsL(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // DIVS.L <ea>, Dq (32/32->32q)
+    // DIVS.L <ea>, Dr:Dq (64/32->32q, remainder in Dr)
+    
+    var cycles: u32 = 90;
+    cycles += getEACycles(inst.src, .Long, true);
+    
+    const ext_word = try m68k.memory.read16(m68k.pc + 2);
+    const dq = @as(u3, @truncate(ext_word & 0x7)); // Quotient register
+    const dr = @as(u3, @truncate((ext_word >> 12) & 0x7)); // Remainder register
+    const is_64bit = (ext_word & 0x0400) != 0;
+    
+    const divisor: i32 = @bitCast(try getOperandValue(m68k, inst.src, .Long));
+    
+    if (divisor == 0) {
+        return error.DivideByZero;
+    }
+    
+    if (is_64bit) {
+        // 64-bit dividend
+        const dividend_low: u32 = m68k.d[dq];
+        const dividend_high: u32 = m68k.d[dr];
+        const dividend: i64 = @bitCast((@as(u64, dividend_high) << 32) | @as(u64, dividend_low));
+        
+        const quotient: i64 = @divTrunc(dividend, divisor);
+        const remainder: i64 = @rem(dividend, divisor);
+        
+        // Check overflow
+        if (quotient < -2147483648 or quotient > 2147483647) {
+            m68k.setFlag(cpu.M68k.FLAG_V, true);
+            m68k.pc += 4;
+            return cycles;
+        }
+        
+        m68k.d[dq] = @bitCast(@as(i32, @truncate(quotient)));
+        m68k.d[dr] = @bitCast(@as(i32, @truncate(remainder)));
+        
+        m68k.setFlag(cpu.M68k.FLAG_N, quotient < 0);
+        m68k.setFlag(cpu.M68k.FLAG_Z, quotient == 0);
+        m68k.setFlag(cpu.M68k.FLAG_V, false);
+        m68k.setFlag(cpu.M68k.FLAG_C, false);
+    } else {
+        // 32-bit dividend
+        const dividend: i32 = @bitCast(m68k.d[dq]);
+        const quotient: i32 = @divTrunc(dividend, divisor);
+        _ = @rem(dividend, divisor); // remainder not stored in 32-bit mode
+        
+        m68k.d[dq] = @bitCast(quotient);
+        
+        m68k.setFlag(cpu.M68k.FLAG_N, quotient < 0);
+        m68k.setFlag(cpu.M68k.FLAG_Z, quotient == 0);
+        m68k.setFlag(cpu.M68k.FLAG_V, false);
+        m68k.setFlag(cpu.M68k.FLAG_C, false);
+    }
+    
+    m68k.pc += 4;
+    return cycles;
+}
+
+// DIVU.L - Divide Unsigned 64/32 -> 32q:32r
+fn executeDivuL(m68k: *cpu.M68k, inst: *const decoder.Instruction) !u32 {
+    // DIVU.L <ea>, Dq (32/32->32q)
+    // DIVU.L <ea>, Dr:Dq (64/32->32q, remainder in Dr)
+    
+    var cycles: u32 = 90;
+    cycles += getEACycles(inst.src, .Long, true);
+    
+    const ext_word = try m68k.memory.read16(m68k.pc + 2);
+    const dq = @as(u3, @truncate(ext_word & 0x7));
+    const dr = @as(u3, @truncate((ext_word >> 12) & 0x7));
+    const is_64bit = (ext_word & 0x0400) != 0;
+    
+    const divisor: u32 = try getOperandValue(m68k, inst.src, .Long);
+    
+    if (divisor == 0) {
+        return error.DivideByZero;
+    }
+    
+    if (is_64bit) {
+        // 64-bit dividend
+        const dividend_low: u32 = m68k.d[dq];
+        const dividend_high: u32 = m68k.d[dr];
+        const dividend: u64 = (@as(u64, dividend_high) << 32) | @as(u64, dividend_low);
+        
+        const quotient: u64 = dividend / divisor;
+        const remainder: u64 = dividend % divisor;
+        
+        // Check overflow
+        if (quotient > 0xFFFFFFFF) {
+            m68k.setFlag(cpu.M68k.FLAG_V, true);
+            m68k.pc += 4;
+            return cycles;
+        }
+        
+        m68k.d[dq] = @truncate(quotient);
+        m68k.d[dr] = @truncate(remainder);
+        
+        m68k.setFlag(cpu.M68k.FLAG_N, (quotient & 0x80000000) != 0);
+        m68k.setFlag(cpu.M68k.FLAG_Z, quotient == 0);
+        m68k.setFlag(cpu.M68k.FLAG_V, false);
+        m68k.setFlag(cpu.M68k.FLAG_C, false);
+    } else {
+        // 32-bit dividend
+        const dividend: u32 = m68k.d[dq];
+        const quotient: u32 = dividend / divisor;
+        _ = dividend % divisor; // remainder not stored in 32-bit mode
+        
+        m68k.d[dq] = quotient;
+        
+        m68k.setFlag(cpu.M68k.FLAG_N, (quotient & 0x80000000) != 0);
+        m68k.setFlag(cpu.M68k.FLAG_Z, quotient == 0);
+        m68k.setFlag(cpu.M68k.FLAG_V, false);
+        m68k.setFlag(cpu.M68k.FLAG_C, false);
+    }
+    
+    m68k.pc += 4;
+    return cycles;
 }

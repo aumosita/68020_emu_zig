@@ -65,6 +65,15 @@ pub const Mnemonic = enum {
     // BCD (Binary Coded Decimal)
     ABCD, SBCD, NBCD,
     
+    // 68020 전용
+    BFTST, BFSET, BFCLR, BFEXTS, BFEXTU, BFINS, BFFFO,
+    CAS, CAS2,
+    PACK, UNPK,
+    CHK2, CMP2,
+    RTD, TRAPcc, BKPT,
+    MULS_L, MULU_L,
+    DIVS_L, DIVU_L,
+    
     // 프로그램 제어
     BRA, BSR,
     Bcc,
@@ -88,9 +97,6 @@ pub const Mnemonic = enum {
     
     // 스택 연산
     LINK, UNLK,
-    
-    // 비트 필드 (68020)
-    BFCHG, BFCLR, BFEXTS, BFEXTU, BFFFO, BFINS, BFSET, BFTST,
     
     UNKNOWN,
 };
@@ -374,13 +380,14 @@ pub const Decoder = struct {
             inst.data_size = if ((opmode & 1) == 0) .Word else .Long;
             inst.src = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, inst.data_size);
             inst.dst = .{ .AddrReg = @truncate(reg) };
-        } else if (opmode == 0x1 or opmode == 0x3 or opmode == 0x5) {
-            // CMPM: opmode 001 (byte), 011 (word), 101 (long)
+        } else if (ea_mode == 0x1 and ((opcode >> 8) & 1) == 1 and opmode <= 0x2) {
+            // CMPM: bit 8 = 1, ea_mode=001 (PostInc), opmode=size (0/1/2)
+            // Format: 1011 Ax 1 Size 001 Ay
             inst.mnemonic = .CMPM;
             inst.data_size = switch (opmode) {
-                0x1 => .Byte,
-                0x3 => .Word,
-                0x5 => .Long,
+                0x0 => .Byte,
+                0x1 => .Word,
+                0x2 => .Long,
                 else => .Byte,
             };
             // opcode를 그대로 사용하여 executor에서 레지스터 추출
@@ -457,6 +464,36 @@ pub const Decoder = struct {
         var inst = Instruction.init();
         inst.opcode = opcode;
         
+        // Check for 68020 bit field operations first
+        if ((opcode & 0xF8C0) == 0xE8C0) {
+            // Bit field operations: E8C0-EFFF
+            const bf_type = (opcode >> 8) & 0x7;
+            inst.mnemonic = switch (bf_type) {
+                0 => .BFTST,  // E8C0
+                1 => .BFEXTU, // E9C0
+                2 => .UNKNOWN,  // EAC0 (BFCHG - not implemented)
+                3 => .BFEXTS, // EBC0
+                4 => .BFCLR,  // ECC0
+                5 => .BFFFO,  // EDC0
+                6 => .BFSET,  // EEC0
+                7 => .BFINS,  // EFC0
+                else => .UNKNOWN,
+            };
+            
+            // Read extension word for offset:width
+            const ext = read_word(current_pc);
+            current_pc += 2;
+            inst.src = .{ .Immediate16 = ext };
+            
+            // Decode EA
+            const ea_mode = (opcode >> 3) & 0x7;
+            const ea_reg = opcode & 0x7;
+            inst.dst = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, .Long);
+            
+            inst.size = @truncate(current_pc - pc);
+            return inst;
+        }
+        
         const size_bits = (opcode >> 6) & 0x3;
         if (size_bits == 0x3) {
             // Memory shift
@@ -511,6 +548,47 @@ pub const Decoder = struct {
         var current_pc = pc + 2;
         var inst = Instruction.init();
         inst.opcode = opcode;
+        
+        // 68020: CAS - Compare and Swap
+        if ((opcode & 0xFFC0) == 0x0AC0 or (opcode & 0xFFC0) == 0x0CC0 or (opcode & 0xFFC0) == 0x0EC0) {
+            const size_bits = (opcode >> 9) & 0x3;
+            if (size_bits == 1 or size_bits == 2 or size_bits == 3) {
+                inst.mnemonic = .CAS;
+                inst.data_size = if (size_bits == 1) .Byte else if (size_bits == 2) .Word else .Long;
+                
+                // Read extension word: Dc:Du
+                const ext = read_word(current_pc);
+                current_pc += 2;
+                inst.src = .{ .Immediate16 = ext };
+                
+                // Decode EA
+                const ea_mode = (opcode >> 3) & 0x7;
+                const ea_reg = opcode & 0x7;
+                inst.dst = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, inst.data_size);
+                
+                inst.size = @truncate(current_pc - pc);
+                return inst;
+            }
+        }
+        
+        // CAS2 - dual operand (always 0x0CFC or 0x0EFC)
+        if (opcode == 0x0CFC or opcode == 0x0EFC) {
+            inst.mnemonic = .CAS2;
+            inst.data_size = if (opcode == 0x0CFC) .Word else .Long;
+            
+            // Read 2 extension words
+            const ext1 = read_word(current_pc);
+            current_pc += 2;
+            const ext2 = read_word(current_pc);
+            current_pc += 2;
+            
+            // Store extension words in src/dst (simplified)
+            inst.src = .{ .Immediate16 = ext1 };
+            inst.dst = .{ .Immediate16 = ext2 };
+            
+            inst.size = @truncate(current_pc - pc);
+            return inst;
+        }
         
         if ((opcode & 0xF1C0) == 0x0100 or (opcode & 0xF1C0) == 0x0140 or (opcode & 0xF1C0) == 0x0180 or (opcode & 0xF1C0) == 0x01C0) {
             // Bit operations with data register
@@ -627,6 +705,13 @@ pub const Decoder = struct {
             const ea_reg = opcode & 0x7;
             inst.src = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, .Long);
             inst.dst = .{ .DataReg = @truncate(ext & 0x7) };
+        } else if ((opcode & 0xFFC0) == 0x4800) {
+            // NBCD - Negate BCD
+            inst.mnemonic = .NBCD;
+            inst.data_size = .Byte;
+            const ea_mode = (opcode >> 3) & 0x7;
+            const ea_reg = opcode & 0x7;
+            inst.dst = try self.decodeEA(@truncate(ea_mode), @truncate(ea_reg), &current_pc, read_word, .Byte);
         } else if ((opcode & 0xFF00) == 0x4000 or (opcode & 0xFF00) == 0x4200 or (opcode & 0xFF00) == 0x4400 or (opcode & 0xFF00) == 0x4600) {
             const subop = (opcode >> 9) & 0x7;
             inst.mnemonic = switch (subop) {
