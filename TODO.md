@@ -76,7 +76,8 @@
   - 진행: `ABCD/SBCD/NBCD/MOVEP/CAS2/CMPM/SHIFT/MOVEA/STOP/ORI-ANDI-EORI` cycle assertion 회귀 추가
   - 진행: `CHK2/CMP2/CALLM-RTM/TAS/MUL*_L/DIV*_L` cycle assertion 회귀 추가
   - 진행: `PACK/UNPK/MOVEC/ComplexEA/extended-EA/memory shift` cycle assertion 회귀 추가
-  - 잔여: 핵심 명령 cycle 회귀 테스트 범위 확장
+  - ✅ 핵심 명령 cycle 회귀 테스트 범위 확장 완료
+  - 후속 유지보수: 신규 명령/사이클 정책 변경 시 해당 테스트의 고정 cycle assertion 동반 갱신
 
 - `MOVEM` 비용 모델 세분화 ✅(완료)
   - 레지스터 개수, 방향(mem->reg/reg->mem), predecrement/postincrement 별 비용 반영

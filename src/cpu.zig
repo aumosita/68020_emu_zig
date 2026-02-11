@@ -644,8 +644,9 @@ test "M68k MOVEC VBR" {
     try m68k.memory.write16(0x1000, 0x4E7B);
     try m68k.memory.write16(0x1002, 0x0801);
     m68k.pc = 0x1000;
-    _ = try m68k.step();
+    const cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0x12345678), m68k.vbr);
+    try std.testing.expectEqual(@as(u32, 12), cycles);
 }
 
 test "M68k instruction cache hit/miss and invalidate through CACR" {
@@ -1064,10 +1065,11 @@ test "M68k MOVEC privilege violation in user mode" {
     m68k.a[7] = 0x4800;
     m68k.setSR(0x0000);
     m68k.d[0] = 7;
-    _ = try m68k.step();
+    const user_priv_cycles = try m68k.step();
 
     try std.testing.expectEqual(@as(u32, 0xD200), m68k.pc);
     try std.testing.expectEqual(@as(u3, 0), m68k.sfc);
+    try std.testing.expectEqual(@as(u32, 34), user_priv_cycles);
 }
 
 test "M68k MOVEC invalid control register encodings route to vector 4" {
@@ -1083,11 +1085,12 @@ test "M68k MOVEC invalid control register encodings route to vector 4" {
     m68k.pc = 0xD240;
     m68k.a[7] = 0x4840;
     m68k.setSR(0x2000);
-    _ = try m68k.step();
+    const invalid_to_ctrl_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0xD280), m68k.pc);
     try std.testing.expectEqual(@as(u32, 0x4838), m68k.a[7]);
     try std.testing.expectEqual(@as(u16, 4 * 4), try m68k.memory.read16(0x483E));
     try std.testing.expectEqual(@as(u32, 0xD240), try m68k.memory.read32(0x483A));
+    try std.testing.expectEqual(@as(u32, 34), invalid_to_ctrl_cycles);
 
     // MOVEC <invalid control reg 0x805>,D1
     try m68k.memory.write16(0xD250, 0x4E7A);
@@ -1095,11 +1098,12 @@ test "M68k MOVEC invalid control register encodings route to vector 4" {
     m68k.pc = 0xD250;
     m68k.a[7] = 0x4860;
     m68k.setSR(0x2000);
-    _ = try m68k.step();
+    const invalid_from_ctrl_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0xD280), m68k.pc);
     try std.testing.expectEqual(@as(u32, 0x4858), m68k.a[7]);
     try std.testing.expectEqual(@as(u16, 4 * 4), try m68k.memory.read16(0x485E));
     try std.testing.expectEqual(@as(u32, 0xD250), try m68k.memory.read32(0x485A));
+    try std.testing.expectEqual(@as(u32, 34), invalid_from_ctrl_cycles);
 }
 
 test "M68k MOVE USP transfers and user restore consistency" {
@@ -1118,12 +1122,14 @@ test "M68k MOVE USP transfers and user restore consistency" {
     try m68k.memory.write16(0xE002, 0x4E6B);
     m68k.pc = 0xE000;
 
-    _ = try m68k.step();
+    const move_to_usp_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0x22220000), m68k.getStackRegister(.User));
     try std.testing.expectEqual(active_sp_before, m68k.a[7]); // active ISP unchanged
+    try std.testing.expectEqual(@as(u32, 4), move_to_usp_cycles);
 
-    _ = try m68k.step();
+    const move_from_usp_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0x22220000), m68k.a[3]);
+    try std.testing.expectEqual(@as(u32, 4), move_from_usp_cycles);
 
     // Switching back to user mode should load the updated USP into A7.
     m68k.setSR(0x0000);
@@ -1142,9 +1148,10 @@ test "M68k MOVE USP privilege violation in user mode" {
     m68k.a[2] = 0x12345678;
     m68k.setSR(0x0000); // user mode
     m68k.setStackPointer(.User, 0x2000);
-    _ = try m68k.step();
+    const user_mode_cycles = try m68k.step();
 
     try std.testing.expectEqual(@as(u32, 0xE100), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 34), user_mode_cycles);
 }
 
 test "M68k MOVEP - Move Peripheral Data" {
