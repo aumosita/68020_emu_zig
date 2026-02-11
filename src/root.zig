@@ -43,6 +43,24 @@ export fn m68k_execute(m68k: *cpu.M68k, cycles: c_uint) c_int {
     return @intCast(result);
 }
 
+export fn m68k_set_irq(m68k: *cpu.M68k, level: u8) void {
+    if (level <= 7) {
+        m68k.setInterruptLevel(@truncate(level));
+    }
+}
+
+export fn m68k_set_irq_vector(m68k: *cpu.M68k, level: u8, vector: u8) void {
+    if (level <= 7) {
+        m68k.setInterruptVector(@truncate(level), vector);
+    }
+}
+
+export fn m68k_set_spurious_irq(m68k: *cpu.M68k, level: u8) void {
+    if (level <= 7) {
+        m68k.setSpuriousInterrupt(@truncate(level));
+    }
+}
+
 export fn m68k_set_pc(m68k: *cpu.M68k, pc: u32) void {
     m68k.pc = pc;
 }
