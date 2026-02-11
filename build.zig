@@ -174,6 +174,48 @@ pub fn build(b: *std.Build) void {
     run_cycle_demo.step.dependOn(b.getInstallStep());
     const run_cycle_demo_step = b.step("demo-cycles", "Run cycle-accurate demo");
     run_cycle_demo_step.dependOn(&run_cycle_demo.step);
+    
+    // Example: Fibonacci
+    const fibonacci = b.addExecutable(.{
+        .name = "fibonacci",
+        .root_source_file = b.path("examples/fibonacci.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    fibonacci.root_module.addImport("cpu", &lib.root_module);
+    b.installArtifact(fibonacci);
+    const run_fib = b.addRunArtifact(fibonacci);
+    run_fib.step.dependOn(b.getInstallStep());
+    const run_fib_step = b.step("demo-fib", "Run Fibonacci calculator demo");
+    run_fib_step.dependOn(&run_fib.step);
+    
+    // Example: Bit Field Operations
+    const bitfield_demo = b.addExecutable(.{
+        .name = "bitfield-demo",
+        .root_source_file = b.path("examples/bitfield_demo.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    bitfield_demo.root_module.addImport("cpu", &lib.root_module);
+    b.installArtifact(bitfield_demo);
+    const run_bitfield = b.addRunArtifact(bitfield_demo);
+    run_bitfield.step.dependOn(b.getInstallStep());
+    const run_bitfield_step = b.step("demo-bitfield", "Run 68020 bit field operations demo");
+    run_bitfield_step.dependOn(&run_bitfield.step);
+    
+    // Example: Exception Handling
+    const exception_demo = b.addExecutable(.{
+        .name = "exception-demo",
+        .root_source_file = b.path("examples/exception_demo.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    exception_demo.root_module.addImport("cpu", &lib.root_module);
+    b.installArtifact(exception_demo);
+    const run_exception = b.addRunArtifact(exception_demo);
+    run_exception.step.dependOn(b.getInstallStep());
+    const run_exception_step = b.step("demo-exception", "Run 68020 exception handling demo");
+    run_exception_step.dependOn(&run_exception.step);
 
     // Unit tests
     const lib_unit_tests = b.addTest(.{

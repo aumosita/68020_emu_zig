@@ -3,6 +3,11 @@ const cpu = @import("cpu.zig");
 const decoder = @import("decoder.zig");
 const memory = @import("memory.zig");
 
+// Export Zig types for use in other Zig code
+pub const M68k = cpu.M68k;
+pub const Decoder = decoder.Decoder;
+pub const Memory = memory.Memory;
+
 // Export C API for use in other languages (Python, C, etc.)
 // Global page allocator for C API
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
