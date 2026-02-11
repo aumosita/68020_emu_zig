@@ -5,7 +5,7 @@ const executor = @import("executor.zig");
 
 pub const M68k = struct {
     const ICacheLines = 64;
-    const ICacheLine = struct { valid: bool, tag: u32, word: u16 };
+    const ICacheLine = struct { valid: bool, tag: u32, data: u32 };
     pub const CoprocessorResult = union(enum) {
         handled: u32,
         unavailable: void,
@@ -71,7 +71,7 @@ pub const M68k = struct {
             .coprocessor_ctx = null,
             .bkpt_handler = null,
             .bkpt_ctx = null,
-            .icache = [_]ICacheLine{.{ .valid = false, .tag = 0, .word = 0 }} ** ICacheLines,
+            .icache = [_]ICacheLine{.{ .valid = false, .tag = 0, .data = 0 }} ** ICacheLines,
             .memory = memory.Memory.initWithConfig(allocator, config),
             .decoder = decoder.Decoder.init(),
             .executor = executor.Executor.init(),
@@ -372,7 +372,7 @@ pub const M68k = struct {
 
     fn invalidateICache(self: *M68k) void {
         for (&self.icache) |*line| {
-            line.* = .{ .valid = false, .tag = 0, .word = 0 };
+            line.* = .{ .valid = false, .tag = 0, .data = 0 };
         }
     }
 
@@ -389,16 +389,26 @@ pub const M68k = struct {
         if (!self.isICacheEnabled()) {
             return .{ .opcode = try self.memory.read16Bus(addr, access), .penalty_cycles = 0 };
         }
-        const word_addr = addr >> 1;
-        const index: usize = @intCast(word_addr & (ICacheLines - 1));
-        const tag = word_addr >> std.math.log2_int(u32, ICacheLines);
+        const long_addr = addr >> 2;
+        const index: usize = @intCast(long_addr & (ICacheLines - 1));
+        const tag = long_addr >> std.math.log2_int(u32, ICacheLines);
         const line = self.icache[index];
+        const use_low_word = (addr & 0x2) != 0;
         if (line.valid and line.tag == tag) {
-            return .{ .opcode = line.word, .penalty_cycles = 0 };
+            const opcode: u16 = if (use_low_word)
+                @truncate(line.data & 0xFFFF)
+            else
+                @truncate(line.data >> 16);
+            return .{ .opcode = opcode, .penalty_cycles = 0 };
         }
-        const fetched = try self.memory.read16Bus(addr, access);
-        self.icache[index] = .{ .valid = true, .tag = tag, .word = fetched };
-        return .{ .opcode = fetched, .penalty_cycles = 2 };
+        const aligned_addr = addr & ~@as(u32, 0x3);
+        const fetched = try self.memory.read32Bus(aligned_addr, access);
+        self.icache[index] = .{ .valid = true, .tag = tag, .data = fetched };
+        const opcode: u16 = if (use_low_word)
+            @truncate(fetched & 0xFFFF)
+        else
+            @truncate(fetched >> 16);
+        return .{ .opcode = opcode, .penalty_cycles = 2 };
     }
 
     fn buildFormatAAccessWord(access: memory.BusAccess) u16 {
@@ -759,6 +769,48 @@ test "M68k instruction cache hit/miss and invalidate through CACR" {
     m68k.pc = 0x01000000;
     const c3 = try m68k.step();
     try std.testing.expectEqual(@as(u32, 6), c3);
+}
+
+test "M68k instruction cache fill is longword aligned" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.initWithConfig(allocator, .{ .size = 64 * 1024 * 1024 });
+    defer m68k.deinit();
+
+    try m68k.memory.write32(0x00300000, 0x4E714E71); // NOP, NOP
+    m68k.setCacr(0x1); // enable I-cache
+
+    // Miss at upper word of longword line.
+    m68k.pc = 0x00300000;
+    const c0 = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 6), c0);
+
+    // Lower word of the same longword must hit without extra miss penalty.
+    m68k.pc = 0x00300002;
+    const c1 = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 4), c1);
+}
+
+test "M68k instruction cache capacity tracks 256B line window" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.initWithConfig(allocator, .{ .size = 64 * 1024 * 1024 });
+    defer m68k.deinit();
+
+    try m68k.memory.write16(0x00400000, 0x4E71); // NOP
+    try m68k.memory.write16(0x00400080, 0x4E71); // NOP (128B apart)
+    m68k.setCacr(0x1); // enable I-cache
+
+    m68k.pc = 0x00400000;
+    const c0 = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 6), c0); // miss
+
+    m68k.pc = 0x00400080;
+    const c1 = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 6), c1); // another miss on different line
+
+    // 68020 256B I-cache window: address +0x80 maps to a different line, so base line stays resident.
+    m68k.pc = 0x00400000;
+    const c2 = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 4), c2); // hit
 }
 
 test "M68k RTE - Return from Exception" {

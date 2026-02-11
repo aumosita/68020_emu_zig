@@ -27,8 +27,12 @@
 ## 캐시/버스 모델(경량)
 
 - I-cache: 명령 fetch 경로에서만 direct-mapped 경량 모델 적용
+  - 구조: `64 lines x 4 bytes = 256B` (68020 내장 I-cache 용량과 일치)
+  - fill 정책: 미스 시 32-bit 정렬 주소 단위(longword)로 라인 채움
+  - fetch 정책: 채운 longword의 상/하위 word를 `PC[1]`로 선택
   - 미스 시 가중치 사이클(+2), 히트 시 추가 비용 없음
   - `CACR` 비트 기반 enable/무효화 반영
+  - 호환 정책: 기존 경량 캐시 on/off 인터페이스(`CACR` bit0 enable, bit3 invalidate)는 유지
 - 버스 추상화:
   - `BusHook`: `ok/retry/halt/bus_error` 신호 반환
   - `AddressTranslator`: 논리 주소 -> 물리 주소 변환 훅(PMMU 연동 지점)

@@ -94,11 +94,11 @@
   - 진행: 기능 정확도와 독립적인 cycle 비용 계산 경로 분리
   - 완료 기준: cycle 기대값 테스트까지 포함해 CPU step 비용 모델과 연동
 
-- I-Cache 구조 고증 정합성 보강(68020 256B)
-  - line 데이터 폭을 longword 중심으로 재정의(64 entries x 4 bytes)
-  - fetch/fill 로직을 32-bit 정렬 기반으로 조정
-  - 기존 경량 모델과 호환되는 옵션/마이그레이션 정책 유지
-  - 완료 기준: cache hit/miss/invalidate 회귀 + 용량/정렬 정책 문서화
+- I-Cache 구조 고증 정합성 보강(68020 256B) ✅(완료)
+  - ✅ line 데이터 폭을 longword 중심으로 재정의(64 entries x 4 bytes)
+  - ✅ fetch/fill 로직을 32-bit 정렬 기반으로 조정
+  - ✅ 기존 경량 모델과 호환되는 옵션/마이그레이션 정책 유지
+  - ✅ cache hit/miss/invalidate 회귀 + 용량/정렬 정책 문서화
 
 ## 낮은 우선순위
 
