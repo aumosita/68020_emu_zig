@@ -561,6 +561,23 @@ const CoprocTestContext = struct {
     fault_addr: u32 = 0,
 };
 
+const BusHookMode = enum {
+    pass_through,
+    retry_once_program_fetch,
+    halt_program_fetch,
+    bus_error_on_data_write,
+    capture_program_fetch,
+};
+
+const BusHookTestContext = struct {
+    mode: BusHookMode = .pass_through,
+    retried_once: bool = false,
+    saw_data_write: bool = false,
+    saw_program_fetch: bool = false,
+    last_addr: u32 = 0,
+    last_access: memory.BusAccess = .{},
+};
+
 const BkptTestContext = struct {
     called: bool = false,
     last_vector: u3 = 0,
@@ -579,6 +596,36 @@ fn coprocTestHandler(ctx: ?*anyopaque, m68k: *M68k, opcode: u16, _: u32) M68k.Co
         return .{ .handled = 12 };
     }
     return .{ .unavailable = {} };
+}
+
+fn busHookTestHandler(ctx: ?*anyopaque, logical_addr: u32, access: memory.BusAccess) memory.BusSignal {
+    if (ctx == null) return .ok;
+    const typed: *BusHookTestContext = @ptrCast(@alignCast(ctx.?));
+
+    if (access.space == .Data and access.is_write) {
+        typed.saw_data_write = true;
+        typed.last_addr = logical_addr;
+        typed.last_access = access;
+    }
+    if (access.space == .Program and !access.is_write) {
+        typed.saw_program_fetch = true;
+        typed.last_addr = logical_addr;
+        typed.last_access = access;
+    }
+
+    return switch (typed.mode) {
+        .pass_through => .ok,
+        .retry_once_program_fetch => blk: {
+            if (access.space == .Program and !access.is_write and !typed.retried_once) {
+                typed.retried_once = true;
+                break :blk .retry;
+            }
+            break :blk .ok;
+        },
+        .halt_program_fetch => if (access.space == .Program and !access.is_write) .halt else .ok,
+        .bus_error_on_data_write => if (access.space == .Data and access.is_write) .bus_error else .ok,
+        .capture_program_fetch => .ok,
+    };
 }
 
 fn bkptTestHandler(ctx: ?*anyopaque, m68k: *M68k, vector: u3, _: u32) M68k.BkptResult {
@@ -2371,6 +2418,86 @@ test "M68k STOP halts until interrupt and resumes on IRQ" {
     try std.testing.expectEqual(@as(u32, 0x9000), m68k.pc);
     try std.testing.expect(!m68k.stopped);
     try std.testing.expectEqual(@as(u32, 44), irq_entry_cycles);
+}
+
+test "M68k bus retry on instruction fetch stalls one step then executes normally" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    var ctx = BusHookTestContext{ .mode = .retry_once_program_fetch };
+    m68k.memory.setBusHook(busHookTestHandler, &ctx);
+
+    try m68k.memory.write16(0x8800, 0x4E71); // NOP
+    m68k.pc = 0x8800;
+
+    const retry_cycles = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 4), retry_cycles);
+    try std.testing.expectEqual(@as(u32, 0x8800), m68k.pc);
+    try std.testing.expect(ctx.retried_once);
+    try std.testing.expect(!m68k.stopped);
+
+    const exec_cycles = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 4), exec_cycles);
+    try std.testing.expectEqual(@as(u32, 0x8802), m68k.pc);
+}
+
+test "M68k bus halt on instruction fetch stops CPU and IRQ resumes execution path" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    var ctx = BusHookTestContext{ .mode = .halt_program_fetch };
+    m68k.memory.setBusHook(busHookTestHandler, &ctx);
+
+    try m68k.memory.write16(0x8900, 0x4E71); // NOP (never fetched while halted)
+    try m68k.memory.write32(m68k.getExceptionVector(26), 0x8A00); // level-2 autovector handler
+
+    m68k.pc = 0x8900;
+    m68k.a[7] = 0x6000;
+    m68k.setSR(0x2000);
+
+    const halt_cycles = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 4), halt_cycles);
+    try std.testing.expect(m68k.stopped);
+    try std.testing.expectEqual(@as(u32, 0x8900), m68k.pc);
+
+    m68k.setInterruptLevel(2);
+    const irq_cycles = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 44), irq_cycles);
+    try std.testing.expect(!m68k.stopped);
+    try std.testing.expectEqual(@as(u32, 0x8A00), m68k.pc);
+}
+
+test "M68k bus hook observes program fetch FC for user and supervisor modes" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    var ctx = BusHookTestContext{ .mode = .capture_program_fetch };
+    m68k.memory.setBusHook(busHookTestHandler, &ctx);
+
+    try m68k.memory.write16(0x8B00, 0x4E71); // NOP
+    try m68k.memory.write16(0x8B02, 0x4E71); // NOP
+
+    // User mode fetch FC must be 0b010.
+    m68k.pc = 0x8B00;
+    m68k.setSR(0x0000);
+    try std.testing.expectEqual(@as(u32, 4), try m68k.step());
+    try std.testing.expect(ctx.saw_program_fetch);
+    try std.testing.expectEqual(@as(u3, 0b010), ctx.last_access.function_code);
+    try std.testing.expectEqual(memory.AccessSpace.Program, ctx.last_access.space);
+    try std.testing.expect(!ctx.last_access.is_write);
+
+    // Supervisor mode fetch FC must be 0b110.
+    ctx.saw_program_fetch = false;
+    m68k.pc = 0x8B02;
+    m68k.setSR(0x2000);
+    try std.testing.expectEqual(@as(u32, 4), try m68k.step());
+    try std.testing.expect(ctx.saw_program_fetch);
+    try std.testing.expectEqual(@as(u3, 0b110), ctx.last_access.function_code);
+    try std.testing.expectEqual(memory.AccessSpace.Program, ctx.last_access.space);
+    try std.testing.expect(!ctx.last_access.is_write);
 }
 
 test "M68k STOP and RESET privilege violation in user mode" {
