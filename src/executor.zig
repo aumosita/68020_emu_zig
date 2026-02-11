@@ -392,10 +392,10 @@ fn executeLineAEmulator(m: *cpu.M68k) !u32 {
     return 34;
 }
 fn executeBra(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
-    const d = switch (i.src) { .Immediate8 => |v| @as(i32, @as(i8, @bitCast(v))), .Immediate16 => |v| @as(i32, @as(i16, @bitCast(v))), .Immediate32 => |v| @as(i32, @bitCast(v)), else => 0 }; m.pc = @bitCast(@as(i32, @bitCast(m.pc)) + 2 + d); return 10;
+    const d = switch (i.src) { .Immediate8 => |v| @as(i32, @as(i8, @bitCast(v))), .Immediate16 => |v| @as(i32, @as(i16, @bitCast(v))), .Immediate32 => |v| @as(i32, @bitCast(v)), else => 0 }; m.pc = @bitCast(@as(i32, @bitCast(m.pc)) + 2 + d); return branchTakenCycles(i.size);
 }
 fn executeBcc(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
-    const cond: u4 = @truncate((i.opcode >> 8) & 0xF); if (evaluateCondition(m, cond)) return try executeBra(m, i); m.pc += i.size; return 8;
+    const cond: u4 = @truncate((i.opcode >> 8) & 0xF); if (evaluateCondition(m, cond)) return try executeBra(m, i); m.pc += i.size; return branchNotTakenCycles(i.size);
 }
 fn executeBsr(m: *cpu.M68k, i: *const decoder.Instruction) !u32 { m.a[7] -= 4; try m.memory.write32(m.a[7], m.pc + i.size); return try executeBra(m, i); }
 fn executeJsr(m: *cpu.M68k, i: *const decoder.Instruction) !u32 { const t = try calculateEA(m, i.dst); m.a[7] -= 4; try m.memory.write32(m.a[7], m.pc + i.size); m.pc = t; return 16; }
@@ -659,7 +659,7 @@ fn executeBftst(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     var field: u32 = 0; var bit = offset;
     for (0..width) |_| { if ((base & (@as(u32, 1) << @truncate(bit))) != 0) { field |= @as(u32, 1) << @truncate(width - 1 - bit + offset); } bit = (bit + 1) & 31; }
     m.setFlag(cpu.M68k.FLAG_Z, field == 0); m.setFlag(cpu.M68k.FLAG_N, (field & (@as(u32, 1) << @truncate(width - 1))) != 0);
-    m.setFlag(cpu.M68k.FLAG_V, false); m.setFlag(cpu.M68k.FLAG_C, false); m.pc += 4; return 6;
+    m.setFlag(cpu.M68k.FLAG_V, false); m.setFlag(cpu.M68k.FLAG_C, false); m.pc += 4; return bitfieldCycles(i.dst, false);
 }
 fn executeBfset(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const ext = switch (i.src) { .Immediate16 => |v| v, else => 0 };
@@ -668,7 +668,7 @@ fn executeBfset(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     var val = try getOperandValue(m, i.dst, .Long);
     var mask: u32 = 0; for (0..width) |j| { mask |= @as(u32, 1) << @truncate((offset + j) & 31); }
     const field = val & mask; m.setFlag(cpu.M68k.FLAG_Z, field == 0); m.setFlag(cpu.M68k.FLAG_N, (val & (@as(u32, 1) << @truncate((offset + width - 1) & 31))) != 0);
-    val |= mask; try setOperandValue(m, i.dst, val, .Long); m.pc += 4; return 10;
+    val |= mask; try setOperandValue(m, i.dst, val, .Long); m.pc += 4; return bitfieldCycles(i.dst, true);
 }
 fn executeBfclr(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const ext = switch (i.src) { .Immediate16 => |v| v, else => 0 };
@@ -677,7 +677,7 @@ fn executeBfclr(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     var val = try getOperandValue(m, i.dst, .Long);
     var mask: u32 = 0; for (0..width) |j| { mask |= @as(u32, 1) << @truncate((offset + j) & 31); }
     const field = val & mask; m.setFlag(cpu.M68k.FLAG_Z, field == 0); m.setFlag(cpu.M68k.FLAG_N, (val & (@as(u32, 1) << @truncate((offset + width - 1) & 31))) != 0);
-    val &= ~mask; try setOperandValue(m, i.dst, val, .Long); m.pc += 4; return 10;
+    val &= ~mask; try setOperandValue(m, i.dst, val, .Long); m.pc += 4; return bitfieldCycles(i.dst, true);
 }
 fn executeBfchg(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const ext = switch (i.src) { .Immediate16 => |v| v, else => 0 };
@@ -686,7 +686,7 @@ fn executeBfchg(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     var val = try getOperandValue(m, i.dst, .Long);
     var mask: u32 = 0; for (0..width) |j| { mask |= @as(u32, 1) << @truncate((offset + j) & 31); }
     const field = val & mask; m.setFlag(cpu.M68k.FLAG_Z, field == 0); m.setFlag(cpu.M68k.FLAG_N, (val & (@as(u32, 1) << @truncate((offset + width - 1) & 31))) != 0);
-    val ^= mask; try setOperandValue(m, i.dst, val, .Long); m.pc += 4; return 10;
+    val ^= mask; try setOperandValue(m, i.dst, val, .Long); m.pc += 4; return bitfieldCycles(i.dst, true);
 }
 fn executeBfexts(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const ext = switch (i.src) { .Immediate16 => |v| v, else => 0 }; const dn = @as(u3, @truncate((ext >> 12) & 7));
@@ -695,7 +695,7 @@ fn executeBfexts(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const val = try getOperandValue(m, i.dst, .Long); var field: u32 = 0;
     for (0..width) |j| { if ((val & (@as(u32, 1) << @truncate((offset + j) & 31))) != 0) { field |= @as(u32, 1) << @truncate(j); } }
     if ((field & (@as(u32, 1) << @truncate(width - 1))) != 0) { field |= ~(@as(u32, 0) >> @truncate(32 - width)); }
-    m.d[dn] = field; m.setFlag(cpu.M68k.FLAG_Z, field == 0); m.setFlag(cpu.M68k.FLAG_N, (field & 0x80000000) != 0); m.pc += 4; return 8;
+    m.d[dn] = field; m.setFlag(cpu.M68k.FLAG_Z, field == 0); m.setFlag(cpu.M68k.FLAG_N, (field & 0x80000000) != 0); m.pc += 4; return if (isMem(i.dst)) 12 else 8;
 }
 fn executeBfextu(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const ext = switch (i.src) { .Immediate16 => |v| v, else => 0 }; const dn = @as(u3, @truncate((ext >> 12) & 7));
@@ -703,7 +703,7 @@ fn executeBfextu(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const width = if ((ext & 0x20) != 0) ((m.d[@as(u3, @truncate(ext & 7))] - 1) & 31) + 1 else (((ext & 31) - 1) & 31) + 1;
     const val = try getOperandValue(m, i.dst, .Long); var field: u32 = 0;
     for (0..width) |j| { if ((val & (@as(u32, 1) << @truncate((offset + j) & 31))) != 0) { field |= @as(u32, 1) << @truncate(j); } }
-    m.d[dn] = field; m.setFlag(cpu.M68k.FLAG_Z, field == 0); m.setFlag(cpu.M68k.FLAG_N, false); m.pc += 4; return 8;
+    m.d[dn] = field; m.setFlag(cpu.M68k.FLAG_Z, field == 0); m.setFlag(cpu.M68k.FLAG_N, false); m.pc += 4; return if (isMem(i.dst)) 12 else 8;
 }
 fn executeBfins(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const ext = switch (i.src) { .Immediate16 => |v| v, else => 0 }; const dn = @as(u3, @truncate((ext >> 12) & 7));
@@ -713,7 +713,7 @@ fn executeBfins(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     for (0..width) |j| { mask |= @as(u32, 1) << @truncate((offset + j) & 31); }
     val &= ~mask; for (0..width) |j| { if ((m.d[dn] & (@as(u32, 1) << @truncate(j))) != 0) { val |= @as(u32, 1) << @truncate((offset + j) & 31); } }
     m.setFlag(cpu.M68k.FLAG_Z, (val & mask) == 0); m.setFlag(cpu.M68k.FLAG_N, (val & (@as(u32, 1) << @truncate((offset + width - 1) & 31))) != 0);
-    try setOperandValue(m, i.dst, val, .Long); m.pc += 4; return 8;
+    try setOperandValue(m, i.dst, val, .Long); m.pc += 4; return bitfieldCycles(i.dst, true);
 }
 fn executeBfffo(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const ext = switch (i.src) { .Immediate16 => |v| v, else => 0 }; const dn = @as(u3, @truncate((ext >> 12) & 7));
@@ -721,7 +721,7 @@ fn executeBfffo(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const width = if ((ext & 0x20) != 0) ((m.d[@as(u3, @truncate(ext & 7))] - 1) & 31) + 1 else (((ext & 31) - 1) & 31) + 1;
     const val = try getOperandValue(m, i.dst, .Long); var ffo: u32 = offset;
     for (0..width) |j| { if ((val & (@as(u32, 1) << @truncate((offset + j) & 31))) != 0) { ffo = offset + @as(u32, @truncate(j)); break; } } else { ffo = offset + width; }
-    m.d[dn] = ffo; m.setFlag(cpu.M68k.FLAG_Z, ffo == offset + width); m.setFlag(cpu.M68k.FLAG_N, false); m.pc += 4; return 10;
+    m.d[dn] = ffo; m.setFlag(cpu.M68k.FLAG_Z, ffo == offset + width); m.setFlag(cpu.M68k.FLAG_N, false); m.pc += 4; return if (isMem(i.dst)) 14 else 10;
 }
 fn executeCas(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const ext = switch (i.src) { .Immediate16 => |v| v, else => 0 }; const dc = @as(u3, @truncate(ext & 7)); const du = @as(u3, @truncate((ext >> 6) & 7));
@@ -1089,6 +1089,9 @@ fn setOperandValue(m: *cpu.M68k, op: decoder.Operand, v: u32, s: decoder.DataSiz
             m.a[r] -= inc;
             try writeMem(m, m.a[r], v, s);
         },
+        .Address => |a| {
+            try writeMem(m, a, v, s);
+        },
         .AddrDisplace => |i| {
             const a = @as(u32, @bitCast(@as(i32, @bitCast(m.a[i.reg])) + @as(i32, i.displacement)));
             try writeMem(m, a, v, s);
@@ -1181,6 +1184,16 @@ fn setArithmeticFlags(m: *cpu.M68k, d: u32, s: u32, r: u32, sz: decoder.DataSize
 fn evaluateCondition(m: *cpu.M68k, c: u4) bool {
     const cv = m.getFlag(cpu.M68k.FLAG_C); const vv = m.getFlag(cpu.M68k.FLAG_V); const zv = m.getFlag(cpu.M68k.FLAG_Z); const nv = m.getFlag(cpu.M68k.FLAG_N);
     return switch (c) { 0 => true, 1 => false, 2 => !cv and !zv, 3 => cv or zv, 4 => !cv, 5 => cv, 6 => !zv, 7 => zv, 8 => !vv, 9 => vv, 10 => !nv, 11 => nv, 12 => (nv == vv), 13 => (nv != vv), 14 => (nv == vv) and !zv, 15 => zv or (nv != vv) };
+}
+fn branchTakenCycles(size: u8) u32 {
+    return switch (size) { 2 => 10, 4 => 12, 6 => 14, else => 10 };
+}
+fn branchNotTakenCycles(size: u8) u32 {
+    return switch (size) { 2 => 8, 4 => 10, 6 => 12, else => 8 };
+}
+fn bitfieldCycles(dst: decoder.Operand, writes_back: bool) u32 {
+    if (!isMem(dst)) return if (writes_back) 10 else 6;
+    return if (writes_back) 14 else 10;
 }
 fn addBcd(d: u8, s: u8, x: bool) struct { result: u8, carry: bool } {
     var lo = (d & 0xF) + (s & 0xF) + (if (x) @as(u8, 1) else 0); var hi = (d >> 4) + (s >> 4); var c = false;

@@ -2607,6 +2607,114 @@ test "M68k MOVEM cycle model covers register count direction size and addressing
     try std.testing.expectEqual(@as(u32, 18), try m68k.step());
 }
 
+test "M68k branch cycle model reflects displacement-size and condition outcome" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    var bra = decoder.Instruction.init();
+    bra.mnemonic = .BRA;
+
+    bra.size = 2;
+    bra.src = .{ .Immediate8 = 2 };
+    m68k.pc = 0x100;
+    try std.testing.expectEqual(@as(u32, 10), try m68k.executor.execute(&m68k, &bra));
+    try std.testing.expectEqual(@as(u32, 0x104), m68k.pc);
+
+    bra.size = 4;
+    bra.src = .{ .Immediate16 = 2 };
+    m68k.pc = 0x200;
+    try std.testing.expectEqual(@as(u32, 12), try m68k.executor.execute(&m68k, &bra));
+    try std.testing.expectEqual(@as(u32, 0x204), m68k.pc);
+
+    bra.size = 6;
+    bra.src = .{ .Immediate32 = 2 };
+    m68k.pc = 0x300;
+    try std.testing.expectEqual(@as(u32, 14), try m68k.executor.execute(&m68k, &bra));
+    try std.testing.expectEqual(@as(u32, 0x304), m68k.pc);
+
+    var bvs = decoder.Instruction.init();
+    bvs.mnemonic = .Bcc;
+    bvs.opcode = 0x6900; // condition 9 (VS)
+
+    m68k.setFlag(M68k.FLAG_V, false);
+    bvs.size = 2;
+    bvs.src = .{ .Immediate8 = 2 };
+    m68k.pc = 0x400;
+    try std.testing.expectEqual(@as(u32, 8), try m68k.executor.execute(&m68k, &bvs));
+    try std.testing.expectEqual(@as(u32, 0x402), m68k.pc);
+
+    bvs.size = 4;
+    bvs.src = .{ .Immediate16 = 2 };
+    m68k.pc = 0x500;
+    try std.testing.expectEqual(@as(u32, 10), try m68k.executor.execute(&m68k, &bvs));
+    try std.testing.expectEqual(@as(u32, 0x504), m68k.pc);
+
+    bvs.size = 6;
+    bvs.src = .{ .Immediate32 = 2 };
+    m68k.pc = 0x600;
+    try std.testing.expectEqual(@as(u32, 12), try m68k.executor.execute(&m68k, &bvs));
+    try std.testing.expectEqual(@as(u32, 0x606), m68k.pc);
+
+    m68k.setFlag(M68k.FLAG_V, true);
+    bvs.size = 4;
+    bvs.src = .{ .Immediate16 = 2 };
+    m68k.pc = 0x700;
+    try std.testing.expectEqual(@as(u32, 12), try m68k.executor.execute(&m68k, &bvs));
+    try std.testing.expectEqual(@as(u32, 0x704), m68k.pc);
+}
+
+test "M68k bitfield cycle model differentiates register and memory operands" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    var bftst = decoder.Instruction.init();
+    bftst.mnemonic = .BFTST;
+    bftst.size = 4;
+    bftst.src = .{ .Immediate16 = 0x0001 }; // offset=0, width=1
+    bftst.dst = .{ .DataReg = 0 };
+    m68k.d[0] = 1;
+    m68k.pc = 0x800;
+    try std.testing.expectEqual(@as(u32, 6), try m68k.executor.execute(&m68k, &bftst));
+
+    bftst.dst = .{ .Address = 0x9000 };
+    try m68k.memory.write32(0x9000, 1);
+    m68k.pc = 0x810;
+    try std.testing.expectEqual(@as(u32, 10), try m68k.executor.execute(&m68k, &bftst));
+
+    var bfset = decoder.Instruction.init();
+    bfset.mnemonic = .BFSET;
+    bfset.size = 4;
+    bfset.src = .{ .Immediate16 = 0x0001 };
+    bfset.dst = .{ .DataReg = 1 };
+    m68k.d[1] = 0;
+    m68k.pc = 0x820;
+    try std.testing.expectEqual(@as(u32, 10), try m68k.executor.execute(&m68k, &bfset));
+    try std.testing.expectEqual(@as(u32, 1), m68k.d[1] & 1);
+
+    bfset.dst = .{ .Address = 0x9010 };
+    try m68k.memory.write32(0x9010, 0);
+    m68k.pc = 0x830;
+    try std.testing.expectEqual(@as(u32, 14), try m68k.executor.execute(&m68k, &bfset));
+    try std.testing.expectEqual(@as(u32, 1), try m68k.memory.read32(0x9010));
+
+    var bfffo = decoder.Instruction.init();
+    bfffo.mnemonic = .BFFFO;
+    bfffo.size = 4;
+    bfffo.src = .{ .Immediate16 = 0x3001 }; // D3 destination, offset=0, width=1
+    bfffo.dst = .{ .DataReg = 2 };
+    m68k.d[2] = 1;
+    m68k.pc = 0x840;
+    try std.testing.expectEqual(@as(u32, 10), try m68k.executor.execute(&m68k, &bfffo));
+    try std.testing.expectEqual(@as(u32, 0), m68k.d[3]);
+
+    bfffo.dst = .{ .Address = 0x9020 };
+    try m68k.memory.write32(0x9020, 1);
+    m68k.pc = 0x850;
+    try std.testing.expectEqual(@as(u32, 14), try m68k.executor.execute(&m68k, &bfffo));
+}
+
 test "M68k extended-EA instructions advance PC by decoded size" {
     const allocator = std.testing.allocator;
     var m68k = M68k.init(allocator);
