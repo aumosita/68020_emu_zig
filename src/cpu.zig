@@ -191,6 +191,13 @@ pub const M68k = struct {
             self.pc += 2;
             return self.finalizeStepCycles(4 + fetch.penalty_cycles);
         }
+        // Hot-path optimization: BRA.S with 8-bit displacement (excluding ext forms).
+        if ((opcode & 0xFF00) == 0x6000 and (opcode & 0x00FF) != 0 and (opcode & 0x00FF) != 0x00FF) {
+            const disp8: i8 = @bitCast(@as(u8, @truncate(opcode)));
+            self.pc = @bitCast(@as(i32, @bitCast(self.pc)) + 2 + @as(i32, disp8));
+            const base_cycles: u32 = 10 + self.pipelineBranchFlushPenalty();
+            return self.finalizeStepCycles(base_cycles + fetch.penalty_cycles);
+        }
         M68k.current_instance = self;
         M68k.decode_fault_addr = null;
         M68k.decode_fault_kind = .Bus;
@@ -462,6 +469,14 @@ pub const M68k = struct {
         const total = base_cycles + if (self.split_bus_cycle_penalty_enabled) split_penalty else 0;
         self.cycles += total;
         return total;
+    }
+
+    fn pipelineBranchFlushPenalty(self: *const M68k) u32 {
+        return switch (self.pipeline_mode) {
+            .off => 0,
+            .approx => 2,
+            .detailed => 4,
+        };
     }
 
     fn buildFormatAAccessWord(access: memory.BusAccess) u16 {
