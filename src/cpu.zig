@@ -1028,6 +1028,38 @@ test "M68k MOVEC privilege violation in user mode" {
     try std.testing.expectEqual(@as(u3, 0), m68k.sfc);
 }
 
+test "M68k MOVEC invalid control register encodings route to vector 4" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    try m68k.memory.write32(m68k.getExceptionVector(4), 0xD280);
+
+    // MOVEC D0,<invalid control reg 0x805>
+    try m68k.memory.write16(0xD240, 0x4E7B);
+    try m68k.memory.write16(0xD242, 0x0805);
+    m68k.pc = 0xD240;
+    m68k.a[7] = 0x4840;
+    m68k.setSR(0x2000);
+    _ = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 0xD280), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 0x4838), m68k.a[7]);
+    try std.testing.expectEqual(@as(u16, 4 * 4), try m68k.memory.read16(0x483E));
+    try std.testing.expectEqual(@as(u32, 0xD240), try m68k.memory.read32(0x483A));
+
+    // MOVEC <invalid control reg 0x805>,D1
+    try m68k.memory.write16(0xD250, 0x4E7A);
+    try m68k.memory.write16(0xD252, 0x1805);
+    m68k.pc = 0xD250;
+    m68k.a[7] = 0x4860;
+    m68k.setSR(0x2000);
+    _ = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 0xD280), m68k.pc);
+    try std.testing.expectEqual(@as(u32, 0x4858), m68k.a[7]);
+    try std.testing.expectEqual(@as(u16, 4 * 4), try m68k.memory.read16(0x485E));
+    try std.testing.expectEqual(@as(u32, 0xD250), try m68k.memory.read32(0x485A));
+}
+
 test "M68k MOVE USP transfers and user restore consistency" {
     const allocator = std.testing.allocator;
     var m68k = M68k.init(allocator);
@@ -1698,6 +1730,35 @@ test "M68k Line-A opcode enters line-1010 emulator exception" {
     try std.testing.expectEqual(@as(u32, 0x3878), m68k.a[7]);
     try std.testing.expectEqual(@as(u16, 10 * 4), try m68k.memory.read16(0x387E));
     try std.testing.expectEqual(@as(u32, 0x1680), try m68k.memory.read32(0x387A));
+}
+
+test "M68k line-A/F boundary opcodes preserve faulting PC and vectors" {
+    const allocator = std.testing.allocator;
+    var m68k = M68k.init(allocator);
+    defer m68k.deinit();
+
+    try m68k.memory.write32(m68k.getExceptionVector(10), 0x5BA0);
+    try m68k.memory.write32(m68k.getExceptionVector(11), 0x5BE0);
+
+    // Highest line-A opcode
+    try m68k.memory.write16(0x1690, 0xAFFF);
+    m68k.pc = 0x1690;
+    m68k.a[7] = 0x3890;
+    m68k.setSR(0x0000);
+    _ = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 0x5BA0), m68k.pc);
+    try std.testing.expectEqual(@as(u16, 10 * 4), try m68k.memory.read16(0x388E));
+    try std.testing.expectEqual(@as(u32, 0x1690), try m68k.memory.read32(0x388A));
+
+    // Highest line-F opcode
+    try m68k.memory.write16(0x1698, 0xFFFF);
+    m68k.pc = 0x1698;
+    m68k.a[7] = 0x38B0;
+    m68k.setSR(0x0000);
+    _ = try m68k.step();
+    try std.testing.expectEqual(@as(u32, 0x5BE0), m68k.pc);
+    try std.testing.expectEqual(@as(u16, 11 * 4), try m68k.memory.read16(0x38AE));
+    try std.testing.expectEqual(@as(u32, 0x1698), try m68k.memory.read32(0x38AA));
 }
 
 test "M68k BKPT traps through illegal instruction vector when no debugger is attached" {

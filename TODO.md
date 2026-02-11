@@ -34,6 +34,10 @@
   - context 기반 생성/파괴 API(`m68k_context_*`, `m68k_create_in_context`, `m68k_destroy_in_context`) 추가
   - context allocator callback 주입 API(`m68k_context_set_allocator_callbacks`) 추가
   - root API에서 out-of-range/alignment/null-pointer 실패 경로 회귀 추가
+- 불법 인코딩/확장 워드 예외 커버리지 확장 완료:
+  - `CALLM/RTM`, `TRAPcc`, line-A/F, `MOVEC` 경계 인코딩 회귀 강화
+  - `MOVEC` invalid control register 인코딩의 vector 4 라우팅 검증 추가
+  - line-A/F 경계 opcode(`AFFF`, `FFFF`)의 vector/return PC 일관성 검증 추가
 
 ## 높은 우선순위
 
@@ -55,10 +59,8 @@
   - ✅ 외부 allocator callback 주입 API 추가
   - 후속(선택): 구 API 제거 시기/버전 정책 확정
 
-- 불법 인코딩/확장 워드 예외 커버리지 확장
-  - `CALLM/RTM`, bitfield, `MOVEC`, coprocessor/line-A/F의 경계 인코딩 추가
-  - 디코더에서 거부해야 할 모드와 실행기에서 거부해야 할 케이스 분리
-  - 완료 기준: 예외 벡터(4,10,11)와 return PC 일관성 테스트 통과
+- 불법 인코딩/확장 워드 예외 커버리지 확장 ✅(완료)
+  - 후속 유지보수: bitfield 희소 인코딩 및 외부 validation vector와의 교차검증
 
 ## 중간 우선순위
 
