@@ -157,3 +157,97 @@
 - 신규 명령/사이클 정책 변경 시 고정 cycle assertion 테스트 동반 갱신
 - 핸들러 반환 타입 확장 시 코프로세서 계약 문서/회귀 동시 갱신
 - 소프트웨어 TLB 도입 후 translator/hook 변경 시 flush/invalidate 누락 회귀 테스트 유지
+
+---
+
+## 신규 개선 과제 (2026-02-13 분석)
+
+### 높은 우선순위
+
+- **코드 모듈화 개선**
+  - `cpu.zig` 분리: 예외 처리(`exception.zig`), 인터럽트(`interrupt.zig`), 레지스터 접근(`registers.zig`)
+  - 목표: 단일 파일 3,600줄 → 각 모듈 1,000줄 이하로 분할
+  - 이유: 유지보수성 향상, 컴파일 시간 단축
+
+- **에러 처리 통합**
+  - Zig 내부 `anyerror` → 구조화된 에러 타입 전환
+  - C API 에러 매핑 함수(`mapMemoryError` 등) 확장 및 문서화
+  - 목표: 타입 안전성 강화, 디버깅 효율성 향상
+
+### 중간 우선순위
+
+- **메모리 할당 최적화**
+  - Arena allocator 도입으로 빠른 할당/해제 경로 추가
+  - Context별 allocator 풀링으로 멀티스레드 성능 개선
+  - 벤치마크 목표: 멀티 인스턴스 생성/파괴 처리량 50% 향상
+
+- **I-Cache 구조 개선**
+  - 현재: 64 entry direct-mapped → 제안: 2-way set associative
+  - 충돌 감소로 히트율 향상 기대 (벤치 워크로드 기준 측정 필요)
+  - 옵션 플래그로 기존 모델과 병행 지원
+
+- **테스트 통합 및 자동화**
+  - 통합 테스트 러너 추가 (`zig build test-all`)
+  - 테스트 결과 리포트 생성 (JSON/HTML)
+  - Coverage 도구 연동 검토 (kcov, Zig 0.14+ 네이티브 지원 대기)
+  - CI/CD 성능 회귀 검사 통합 (벤치마크 자동 실행 + 추이 그래프)
+
+### 낮은 우선순위
+
+- **문서 자동화**
+  - Zig doc comments 표준화
+  - `zig build docs` 명령으로 HTML 문서 생성
+  - C API 참고 문서 자동화 (Doxygen 스타일)
+
+- **예제 확장**
+  - 실용적 예제 추가:
+    - 간단한 OS 부트로더 시뮬레이션
+    - Atari ST 게임 일부 에뮬레이션 (예: Pong 클론)
+    - 어셈블러 통합 예제 (vasm/asmx 연동)
+
+- **디버깅 지원 강화**
+  - GDB 리모트 프로토콜 stub 구현
+  - 메모리/레지스터 덤프 포맷터 (JSON/human-readable)
+  - 실행 추적(trace) 로그 옵션 (CSV/바이너리)
+
+- **플러그인 아키텍처**
+  - 주변장치(PIC/Timer/UART) 동적 로딩 지원
+  - 사용자 정의 버스 컨트롤러 등록 API 강화
+  - 플러그인 예제 및 가이드 문서 작성
+
+### 장기 과제
+
+- **FPU 우선순위 상향**
+  - 현재: 낮음 → 제안: 중간으로 상향
+  - 이유: 과학 계산/그래픽 애플리케이션 에뮬레이션 수요
+  - Phase 1: FMOVE/FADD/FMUL/FDIV 기본 연산
+  - Phase 2: 80-bit extended precision 지원
+  - Phase 3: 예외 처리(overflow/underflow/NaN) 정밀도
+
+- **PMMU 완전 구현**
+  - 현재: 최소 호환 레이어만 존재
+  - 목표: OS 부팅 가능 수준 (Unix/AmigaOS)
+  - 단계별: TLB 구현 → 페이지 폴트 → 보호 도메인
+
+### 기술 부채 정리
+
+- **빌드 시스템 정리**
+  - 개별 실행 파일 12개 → 타겟 그룹화 (`test-*`, `demo-*`)
+  - 불필요한 artifact 제거 또는 조건부 빌드
+
+- **플랫폼 지원 확대**
+  - Windows/Linux 검증 완료 → macOS 명시적 테스트 추가
+  - CI에 macOS runner 추가 (GitHub Actions)
+
+- **의존성 정책 수립**
+  - 현재: zero-dependency 유지 중
+  - 검토: JSON 파서(std.json 충분), 외부 라이브러리 도입 기준 명시
+
+### Quick Wins (즉시 실행 가능)
+
+- [ ] `.editorconfig` 추가 (코딩 스타일 통일)
+- [ ] `CONTRIBUTING.md` 작성 (PR 가이드라인, 커밋 컨벤션)
+- [ ] GitHub Actions에 Windows 빌드 추가 (현재 Linux만)
+- [ ] 예제에 실행 결과 스크린샷/출력 추가 (`examples/README.md`)
+- [ ] `docs/architecture.md` 작성 (전체 구조 다이어그램)
+- [ ] LICENSE 파일 명시 (현재 없음, MIT/Apache 2.0 검토)
