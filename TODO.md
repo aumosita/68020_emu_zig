@@ -326,3 +326,16 @@ System 6.0.8 구동을 위한 단계별 할 일 목록입니다.
 - [ ] 예제에 실행 결과 스크린샷/출력 추가 (`examples/README.md`)
 - [ ] `docs/architecture.md` 작성 (전체 구조 다이어그램)
 - [ ] LICENSE 파일 명시 (현재 없음, MIT/Apache 2.0 검토)
+
+---
+
+## 분석 보고서 기반 제안 사항 (2026-02-13)
+
+### 즉시 해결 필요 (Critical)
+- [x] **실패하는 테스트 수정**: Core CPU 정확성을 위해 실패하는 3개의 테스트(BitField, BriefExtension, FullExtension 추정) 수정 (테스트 케이스 인코딩 오류 수정 완료)
+- [ ] **인터럽트 처리 검증**: VIA/RBV 인터럽트가 CPU로 정확하게 전달되는지 검증 (에뮬레이션 버그의 주요 원인)
+
+### 기능 보강 (Enhancement)
+- [ ] **하드웨어 구현 구체화**:
+    - `adb.zig`: 사용자 입력 처리를 위한 로직 구현
+    - `scsi.zig`: OS 부팅 및 디스크 I/O를 위한 로직 구현

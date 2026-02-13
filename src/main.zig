@@ -1,18 +1,18 @@
 const std = @import("std");
-const cpu = @import("cpu.zig");
+const cpu = @import("core/cpu.zig");
 
 pub fn main() !void {
     const stdout = std.io.getStdOut().writer();
-    
+
     try stdout.print("Motorola 68020 Emulator - Extended Test Suite\n", .{});
     try stdout.print("==============================================\n\n", .{});
-    
+
     var m68k = cpu.M68k.init(std.heap.page_allocator);
     defer m68k.deinit();
-    
+
     var passed: u32 = 0;
     var total: u32 = 0;
-    
+
     // Test MOVEQ
     total += 1;
     try stdout.print("Test {}: MOVEQ #42, D0\n", .{total});
@@ -25,7 +25,7 @@ pub fn main() !void {
     } else {
         try stdout.print("  ✗ FAIL (got 0x{X})\n", .{m68k.d[0]});
     }
-    
+
     // Test ADDQ with memory
     total += 1;
     try stdout.print("\nTest {}: ADDQ #5, D1\n", .{total});
@@ -39,7 +39,7 @@ pub fn main() !void {
     } else {
         try stdout.print("  ✗ FAIL (got 0x{X})\n", .{m68k.d[1]});
     }
-    
+
     // Test SUBQ
     total += 1;
     try stdout.print("\nTest {}: SUBQ #3, D2\n", .{total});
@@ -53,7 +53,7 @@ pub fn main() !void {
     } else {
         try stdout.print("  ✗ FAIL (got 0x{X})\n", .{m68k.d[2]});
     }
-    
+
     // Test CLR
     total += 1;
     try stdout.print("\nTest {}: CLR.L D3\n", .{total});
@@ -65,9 +65,9 @@ pub fn main() !void {
         try stdout.print("  ✓ PASS\n", .{});
         passed += 1;
     } else {
-        try stdout.print("  ✗ FAIL (got 0x{X}, Z={})\n", .{m68k.d[3], m68k.getFlag(cpu.M68k.FLAG_Z)});
+        try stdout.print("  ✗ FAIL (got 0x{X}, Z={})\n", .{ m68k.d[3], m68k.getFlag(cpu.M68k.FLAG_Z) });
     }
-    
+
     // Test NOT
     total += 1;
     try stdout.print("\nTest {}: NOT.W D4\n", .{total});
@@ -81,7 +81,7 @@ pub fn main() !void {
     } else {
         try stdout.print("  ✗ FAIL (got 0x{X})\n", .{m68k.d[4]});
     }
-    
+
     // Test SWAP
     total += 1;
     try stdout.print("\nTest {}: SWAP D5\n", .{total});
@@ -95,7 +95,7 @@ pub fn main() !void {
     } else {
         try stdout.print("  ✗ FAIL (got 0x{X})\n", .{m68k.d[5]});
     }
-    
+
     // Test EXT.W (byte to word)
     total += 1;
     try stdout.print("\nTest {}: EXT.W D6 (sign extend)\n", .{total});
@@ -109,7 +109,7 @@ pub fn main() !void {
     } else {
         try stdout.print("  ✗ FAIL (got 0x{X})\n", .{m68k.d[6]});
     }
-    
+
     // Test MULU
     total += 1;
     try stdout.print("\nTest {}: MULU D1, D0 (5 * 10 = 50)\n", .{total});
@@ -124,7 +124,7 @@ pub fn main() !void {
     } else {
         try stdout.print("  ✗ FAIL (got {})\n", .{m68k.d[0]});
     }
-    
+
     // Test DIVU
     total += 1;
     try stdout.print("\nTest {}: DIVU D3, D2 (25 / 5 = 5)\n", .{total});
@@ -140,7 +140,7 @@ pub fn main() !void {
     } else {
         try stdout.print("  ✗ FAIL (got quotient={})\n", .{quotient});
     }
-    
+
     // Test memory operations
     total += 1;
     try stdout.print("\nTest {}: Memory read/write (big-endian)\n", .{total});
@@ -154,7 +154,7 @@ pub fn main() !void {
     } else {
         try stdout.print("  ✗ FAIL\n", .{});
     }
-    
+
     // Test address register operations
     total += 1;
     try stdout.print("\nTest {}: ADDQ #4, A0 (address register)\n", .{total});
@@ -163,14 +163,14 @@ pub fn main() !void {
     m68k.a[0] = 0x1000;
     const before = m68k.a[0];
     _ = try m68k.step();
-    try stdout.print("  Before: 0x{X}, After: 0x{X}\n", .{before, m68k.a[0]});
+    try stdout.print("  Before: 0x{X}, After: 0x{X}\n", .{ before, m68k.a[0] });
     if (m68k.a[0] == 0x1004) {
         try stdout.print("  ✓ PASS\n", .{});
         passed += 1;
     } else {
         try stdout.print("  ✗ FAIL (got 0x{X})\n", .{m68k.a[0]});
     }
-    
+
     // Test indirect addressing
     total += 1;
     try stdout.print("\nTest {}: Indirect addressing (A1)\n", .{total});
@@ -183,7 +183,7 @@ pub fn main() !void {
     } else {
         try stdout.print("  ✗ FAIL\n", .{});
     }
-    
+
     // --- 68020 Specific Tests ---
     try stdout.print("\n68020 Specific Feature Tests\n", .{});
     try stdout.print("---------------------------\n", .{});
@@ -197,8 +197,8 @@ pub fn main() !void {
     // Opcode: 0x2230
     // Extension: 0x8808 (D0, Long, Scale 4, Displacement 8)
     try m68k.memory.write16(0x1000, 0x2230);
-    try m68k.memory.write16(0x1002, 0x8808);
-    try m68k.memory.write32(0x2000 + 0x10*4 + 0x8, 0x12345678);
+    try m68k.memory.write16(0x1002, 0x0C08);
+    try m68k.memory.write32(0x2000 + 0x10 * 4 + 0x8, 0x12345678);
     m68k.pc = 0x1000;
     _ = try m68k.step();
     if (m68k.d[1] == 0x12345678) {
@@ -218,12 +218,12 @@ pub fn main() !void {
     // 2. 0x4000 + (D0*2) + 0x20 -> 0x402A
     // 3. [0x402A] -> 0xDEADBEEF
     try m68k.memory.write32(0x3010, 0x4000);
-    try m68k.memory.write32(0x4000 + 5*2 + 0x20, 0xDEADBEEF);
-    
+    try m68k.memory.write32(0x4000 + 5 * 2 + 0x20, 0xDEADBEEF);
+
     // Opcode: 0x2230
     // Extension: 0x8137 (Full, D0, Scale 2, Indirect Post, bd word, od word)
     try m68k.memory.write16(0x1000, 0x2230);
-    try m68k.memory.write16(0x1002, 0x8137);
+    try m68k.memory.write16(0x1002, 0x0B26);
     try m68k.memory.write16(0x1004, 0x0010); // bd
     try m68k.memory.write16(0x1006, 0x0020); // od
     m68k.pc = 0x1000;
@@ -237,16 +237,14 @@ pub fn main() !void {
 
     // Summary
     try stdout.print("\n" ++ "=" ** 50 ++ "\n", .{});
-    try stdout.print("Test Results: {} / {} passed ({d:.1}%)\n", .{
-        passed, total, @as(f64, @floatFromInt(passed)) / @as(f64, @floatFromInt(total)) * 100.0
-    });
-    
+    try stdout.print("Test Results: {} / {} passed ({d:.1}%)\n", .{ passed, total, @as(f64, @floatFromInt(passed)) / @as(f64, @floatFromInt(total)) * 100.0 });
+
     if (passed == total) {
         try stdout.print("\n🎉 All tests passed!\n", .{});
     } else {
         try stdout.print("\n⚠️  Some tests failed\n", .{});
     }
-    
+
     try stdout.print("\n📊 Implemented Features:\n", .{});
     try stdout.print("  ✓ MOVE family (MOVE, MOVEA, MOVEQ)\n", .{});
     try stdout.print("  ✓ ADD family (ADD, ADDA, ADDI, ADDQ, ADDX)\n", .{});
@@ -265,6 +263,6 @@ pub fn main() !void {
     try stdout.print("    - With displacement (d16(An))\n", .{});
     try stdout.print("    - Immediate (#imm)\n", .{});
     try stdout.print("    - Absolute (addr.W/.L)\n", .{});
-    
+
     try stdout.print("\n🚀 Emulator ready for use!\n", .{});
 }
