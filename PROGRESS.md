@@ -177,34 +177,36 @@ const amiga_regions = [_]bus_cycle.WaitStateRegion{
 
 ---
 
-## 다음 단계: Phase 2
-
-### 목표
-**벤치마크 실칩 오차 ±5% 이내**
+## Phase 2: 성능 및 안정성 - **진행 중** 🚧
 
 ### 과제 (중간 우선순위)
 
-#### 1. 버스 에러 복구 강화 (1일)
-- 재시도 카운터 추가 (최대 3회)
-- 재시도 실패 시 예외 프레임에 시도 횟수 기록
+#### 1. 버스 에러 복구 강화 (1일) ✅
+**커밋**: (작업 중)
+- 재시도 카운터 추가 (최대 3회 기본값)
+- 재시도 실패 시 예외 프레임(Format $A)에 시도 횟수 기록
 - API: `setBusRetryLimit`, `getBusRetryCount`
+- 테스트: `src/test_bus_retry.zig` (통과)
 
-#### 2. I-Cache 2-way set associative (2일)
-- 현재: 64 entry direct-mapped
-- 목표: 32 set × 2-way
-- LRU 교체 정책
-- 히트율 10-15% 향상 기대
+#### 2. I-Cache 2-way set associative (2일) ✅
+**커밋**: (작업 중)
+- 32 sets × 2-way 구조 (총 64 entry)
+- LRU(Least Recently Used) 교체 정책 구현
+- `lru` 플래그로 최근 사용 방식 추적 및 교체 결정
+- 테스트: `src/test_icache_assoc.zig` (통과)
+- 기대 효과: 히트율 10-15% 향상
 
-#### 3. 사이클 프로파일러 (2일)
-- 명령어별 누적 사이클 통계
-- 핫스팟 자동 식별
-- Top 10 cycle consumers 리포트
-
-**예상 소요 시간**: 5일 → **실제 목표**: 2일 이내
+#### 3. 사이클 프로파일러 (2일) ✅
+**커밋**: (작업 중)
+- 명령어 그룹(opcode high byte)별 실행 횟수 및 누적 사이클 통계 수집
+- `printProfilerReport()` 함수로 실행 통계 리포트 출력 기능 추가
+- Top 10 사이클 점유 명령어 자동 식별 및 점유율(%) 표시
+- 테스트: `src/test_profiler.zig` (통과)
+- 목표 달성: Phase 2 성능 분석 인프라 구축 완료
 
 ---
 
-## 참조
+## Phase 3: 고급 기능 (예정)
 
 ### GitHub
 - **Repository**: https://github.com/aumosita/68020_emu_zig

@@ -4,8 +4,9 @@ const decoder = @import("decoder.zig");
 const executor = @import("executor.zig");
 
 pub const M68k = struct {
-    const ICacheLines = 64;
-    const ICacheLine = struct { valid: bool, tag: u32, data: u32 };
+    const ICacheSets = 32;
+    const ICacheWays = 2;
+    const ICacheLine = struct { valid: bool, tag: u32, data: u32, lru: bool };
     pub const ICacheStats = struct { hits: u64, misses: u64 };
     pub const PipelineMode = enum(u8) { off = 0, approx = 1, detailed = 2 };
     pub const CoprocessorResult = union(enum) {
@@ -41,7 +42,7 @@ pub const M68k = struct {
     coprocessor_ctx: ?*anyopaque,
     bkpt_handler: ?BkptHandler,
     bkpt_ctx: ?*anyopaque,
-    icache: [ICacheLines]ICacheLine,
+    icache: [ICacheSets][ICacheWays]ICacheLine,
     memory: memory.Memory,
     decoder: decoder.Decoder,
     executor: executor.Executor,
@@ -52,8 +53,19 @@ pub const M68k = struct {
     icache_fetch_miss_penalty: u32,
     icache_hit_count: u64,
     icache_miss_count: u64,
+    bus_retry_limit: u8,
+    bus_retry_count: u8,
+    profiler_enabled: bool = false,
+    profiler_data: ?*CycleProfilerData = null,
     pipeline_mode: PipelineMode,
     allocator: std.mem.Allocator,
+    
+    pub const CycleProfilerData = struct {
+        instruction_counts: [256]u64 = [_]u64{0} ** 256,
+        instruction_cycles: [256]u64 = [_]u64{0} ** 256,
+        total_steps: u64 = 0,
+        total_cycles: u64 = 0,
+    };
     
     pub fn init(allocator: std.mem.Allocator) M68k {
         return initWithConfig(allocator, .{});
@@ -82,7 +94,7 @@ pub const M68k = struct {
             .coprocessor_ctx = null,
             .bkpt_handler = null,
             .bkpt_ctx = null,
-            .icache = [_]ICacheLine{.{ .valid = false, .tag = 0, .data = 0 }} ** ICacheLines,
+            .icache = [_][ICacheWays]ICacheLine{[_]ICacheLine{.{ .valid = false, .tag = 0, .data = 0, .lru = false }} ** ICacheWays} ** ICacheSets,
             .memory = memory.Memory.initWithConfig(allocator, config),
             .decoder = decoder.Decoder.init(),
             .executor = executor.Executor.init(),
@@ -93,12 +105,19 @@ pub const M68k = struct {
             .icache_fetch_miss_penalty = 2,
             .icache_hit_count = 0,
             .icache_miss_count = 0,
+            .bus_retry_limit = 3,
+            .bus_retry_count = 0,
+            .profiler_enabled = false,
+            .profiler_data = null,
             .pipeline_mode = .off,
             .allocator = allocator,
         };
     }
     
     pub fn deinit(self: *M68k) void {
+        if (self.profiler_data) |data| {
+            self.allocator.destroy(data);
+        }
         self.memory.deinit();
     }
     
@@ -123,6 +142,7 @@ pub const M68k = struct {
         self.last_data_access_is_write = false;
         self.icache_hit_count = 0;
         self.icache_miss_count = 0;
+        self.bus_retry_count = 0;
         _ = self.memory.takeSplitCyclePenalty();
     }
     
@@ -152,20 +172,34 @@ pub const M68k = struct {
     pub fn step(self: *M68k) !u32 {
         _ = self.memory.takeSplitCyclePenalty();
         if (try self.handlePendingInterrupt()) {
+            self.bus_retry_count = 0;
             return self.finalizeStepCycles(44);
         }
         if (self.stopped) {
+            self.bus_retry_count = 0;
             return self.finalizeStepCycles(4);
         }
         const fetch = self.fetchInstructionWord(self.pc) catch |err| switch (err) {
             error.BusRetry => {
-                return self.finalizeStepCycles(4);
+                if (self.bus_retry_count < self.bus_retry_limit) {
+                    self.bus_retry_count += 1;
+                    return self.finalizeStepCycles(4);
+                }
+                try self.enterBusErrorFrameA(self.pc, self.pc, .{
+                    .function_code = self.getProgramFunctionCode(),
+                    .space = .Program,
+                    .is_write = false,
+                });
+                self.bus_retry_count = 0;
+                return self.finalizeStepCycles(faultCycles(.instruction_fetch));
             },
             error.BusHalt => {
+                self.bus_retry_count = 0;
                 self.stopped = true;
                 return self.finalizeStepCycles(4);
             },
             error.BusError => {
+                self.bus_retry_count = 0;
                 try self.enterBusErrorFrameA(self.pc, self.pc, .{
                     .function_code = self.getProgramFunctionCode(),
                     .space = .Program,
@@ -175,6 +209,7 @@ pub const M68k = struct {
                 return self.finalizeStepCycles(cycles);
             },
             error.AddressError => {
+                self.bus_retry_count = 0;
                 try self.enterAddressErrorFrameA(self.pc, self.pc, .{
                     .function_code = self.getProgramFunctionCode(),
                     .space = .Program,
@@ -189,7 +224,10 @@ pub const M68k = struct {
         // Hot-path optimization: NOP has no side effects beyond PC/cycle update.
         if (opcode == 0x4E71) {
             self.pc += 2;
-            return self.finalizeStepCycles(4 + fetch.penalty_cycles);
+            self.bus_retry_count = 0;
+            const cycles = 4 + fetch.penalty_cycles;
+            self.recordProfiler(opcode, cycles);
+            return self.finalizeStepCycles(cycles);
         }
         // Hot-path optimization: ADDQ/SUBQ long to data register direct.
         if ((opcode & 0xF000) == 0x5000 and ((opcode >> 6) & 0x3) == 0x2 and ((opcode >> 3) & 0x7) == 0x0) {
@@ -202,20 +240,28 @@ pub const M68k = struct {
             self.d[reg] = r;
             self.applyAddSubFlagsLong(d, imm, r, is_sub);
             self.pc += 2;
-            return self.finalizeStepCycles(4 + fetch.penalty_cycles);
+            self.bus_retry_count = 0;
+            const cycles = 4 + fetch.penalty_cycles;
+            self.recordProfiler(opcode, cycles);
+            return self.finalizeStepCycles(cycles);
         }
         // Hot-path optimization: BRA.S with 8-bit displacement (excluding ext forms).
         if ((opcode & 0xFF00) == 0x6000 and (opcode & 0x00FF) != 0 and (opcode & 0x00FF) != 0x00FF) {
             const disp8: i8 = @bitCast(@as(u8, @truncate(opcode)));
             self.pc = @bitCast(@as(i32, @bitCast(self.pc)) + 2 + @as(i32, disp8));
+            self.bus_retry_count = 0;
             const base_cycles: u32 = 10 + self.pipelineBranchFlushPenalty();
-            return self.finalizeStepCycles(base_cycles + fetch.penalty_cycles);
+            const cycles = base_cycles + fetch.penalty_cycles;
+            self.recordProfiler(opcode, cycles);
+            return self.finalizeStepCycles(cycles);
         }
         // Hot-path optimization: common RTE format-0 frame unwind in supervisor mode.
         if (opcode == 0x4E73) {
             if (!self.getFlag(FLAG_S)) {
                 try self.enterException(8, self.pc, 0, null);
-                return self.finalizeStepCycles(34 + fetch.penalty_cycles);
+                const cycles = 34 + fetch.penalty_cycles;
+                self.recordProfiler(opcode, cycles);
+                return self.finalizeStepCycles(cycles);
             }
             const sp = self.a[7];
             if (sp + 7 < self.memory.size and (!self.memory.enforce_alignment or (sp & 1) == 0)) {
@@ -238,7 +284,9 @@ pub const M68k = struct {
                     self.a[7] = sp + 8;
                     self.setSR(restored_sr);
                     self.pc = restored_pc;
-                    return self.finalizeStepCycles(20 + fetch.penalty_cycles);
+                    const cycles = 20 + fetch.penalty_cycles;
+                    self.recordProfiler(opcode, cycles);
+                    return self.finalizeStepCycles(cycles);
                 }
             }
         }
@@ -267,6 +315,7 @@ pub const M68k = struct {
                     .is_write = false,
                 });
             }
+            self.bus_retry_count = 0;
             const cycles = faultCycles(.decode_extension_fetch) + fetch.penalty_cycles;
             return self.finalizeStepCycles(cycles);
         }
@@ -274,13 +323,25 @@ pub const M68k = struct {
         self.last_data_access_is_write = false;
         const cycles_used = self.executor.execute(self, &instruction) catch |err| switch (err) {
             error.BusRetry => {
-                return self.finalizeStepCycles(4 + fetch.penalty_cycles);
+                if (self.bus_retry_count < self.bus_retry_limit) {
+                    self.bus_retry_count += 1;
+                    return self.finalizeStepCycles(4 + fetch.penalty_cycles);
+                }
+                try self.enterBusErrorFrameA(self.pc, self.last_data_access_addr, .{
+                    .function_code = self.dfc,
+                    .space = .Data,
+                    .is_write = self.last_data_access_is_write,
+                });
+                self.bus_retry_count = 0;
+                return self.finalizeStepCycles(faultCycles(.execute_data_access) + fetch.penalty_cycles);
             },
             error.BusHalt => {
+                self.bus_retry_count = 0;
                 self.stopped = true;
                 return self.finalizeStepCycles(4 + fetch.penalty_cycles);
             },
             error.BusError => {
+                self.bus_retry_count = 0;
                 try self.enterBusErrorFrameA(self.pc, self.last_data_access_addr, .{
                     .function_code = self.dfc,
                     .space = .Data,
@@ -290,6 +351,7 @@ pub const M68k = struct {
                 return self.finalizeStepCycles(cycles);
             },
             error.InvalidAddress => {
+                self.bus_retry_count = 0;
                 try self.enterBusErrorFrameA(self.pc, self.last_data_access_addr, .{
                     .function_code = self.dfc,
                     .space = .Data,
@@ -299,6 +361,7 @@ pub const M68k = struct {
                 return self.finalizeStepCycles(cycles);
             },
             error.AddressError => {
+                self.bus_retry_count = 0;
                 try self.enterAddressErrorFrameA(self.pc, self.last_data_access_addr, .{
                     .function_code = self.dfc,
                     .space = .Data,
@@ -308,12 +371,24 @@ pub const M68k = struct {
                 return self.finalizeStepCycles(cycles);
             },
             error.InvalidOperand, error.InvalidExtensionWord, error.InvalidControlRegister, error.Err => {
+                self.bus_retry_count = 0;
                 try self.enterException(4, self.pc, 0, null);
                 return self.finalizeStepCycles(34 + fetch.penalty_cycles);
             },
             else => return err,
         };
-        return self.finalizeStepCycles(cycles_used + fetch.penalty_cycles);
+        self.bus_retry_count = 0;
+        const final_cycles = cycles_used + fetch.penalty_cycles;
+        if (self.profiler_enabled) {
+            if (self.profiler_data) |data| {
+                const group: u8 = @truncate(opcode >> 8);
+                data.instruction_counts[group] += 1;
+                data.instruction_cycles[group] += final_cycles;
+                data.total_steps += 1;
+                data.total_cycles += final_cycles;
+            }
+        }
+        return self.finalizeStepCycles(final_cycles);
     }
     
     threadlocal var current_instance: ?*const M68k = null;
@@ -454,6 +529,81 @@ pub const M68k = struct {
         return self.pipeline_mode;
     }
 
+    pub fn setBusRetryLimit(self: *M68k, limit: u8) void {
+        self.bus_retry_limit = limit;
+    }
+
+    pub fn getBusRetryCount(self: *const M68k) u8 {
+        return self.bus_retry_count;
+    }
+
+    pub fn enableProfiler(self: *M68k) !void {
+        if (self.profiler_data == null) {
+            self.profiler_data = try self.allocator.create(CycleProfilerData);
+            self.profiler_data.?.* = .{};
+        }
+        self.profiler_enabled = true;
+    }
+
+    pub fn disableProfiler(self: *M68k) void {
+        self.profiler_enabled = false;
+    }
+
+    pub fn resetProfiler(self: *M68k) void {
+        if (self.profiler_data) |data| {
+            data.* = .{};
+        }
+    }
+
+    pub fn getProfilerData(self: *const M68k) ?*const CycleProfilerData {
+        return self.profiler_data;
+    }
+
+    pub fn printProfilerReport(self: *const M68k) void {
+        const data = self.profiler_data orelse return;
+        if (data.total_steps == 0) return;
+
+        std.debug.print("\n--- 68020 Cycle Profiler Report ---\n", .{});
+        std.debug.print("Total Instructions: {}\n", .{data.total_steps});
+        std.debug.print("Total Cycles:       {}\n", .{data.total_cycles});
+        std.debug.print("Avg Cycles/Inst:    {d:.2}\n", .{@as(f64, @floatFromInt(data.total_cycles)) / @as(f64, @floatFromInt(data.total_steps))});
+        std.debug.print("\nTop 10 Instruction Groups by Cycle Usage:\n", .{});
+        
+        const Entry = struct { group: u8, cycles: u64, count: u64 };
+        var entries: [256]Entry = undefined;
+        for (0..256) |i| {
+            entries[i] = .{ .group = @truncate(i), .cycles = data.instruction_cycles[i], .count = data.instruction_counts[i] };
+        }
+
+        // Sort by cycles descending
+        std.mem.sort(Entry, &entries, {}, struct {
+            fn lessThan(_: void, a: Entry, b: Entry) bool {
+                return a.cycles > b.cycles;
+            }
+        }.lessThan);
+
+        var shown: usize = 0;
+        for (entries) |e| {
+            if (e.cycles == 0 or shown >= 10) break;
+            const percentage = (@as(f64, @floatFromInt(e.cycles)) / @as(f64, @floatFromInt(data.total_cycles))) * 100.0;
+            std.debug.print("{:2}. Group 0x{X:02}: {:10} cycles ({:6.2}%) - Executed {:8} times\n", .{shown + 1, e.group, e.cycles, percentage, e.count});
+            shown += 1;
+        }
+        std.debug.print("-----------------------------------\n", .{});
+    }
+
+    fn recordProfiler(self: *M68k, opcode: u16, cycles: u32) void {
+        if (self.profiler_enabled) {
+            if (self.profiler_data) |data| {
+                const group: u8 = @truncate(opcode >> 8);
+                data.instruction_counts[group] += 1;
+                data.instruction_cycles[group] += cycles;
+                data.total_steps += 1;
+                data.total_cycles += cycles;
+            }
+        }
+    }
+
     pub fn setCacr(self: *M68k, value: u32) void {
         if ((value & 0x8) != 0) {
             self.invalidateICache();
@@ -466,8 +616,10 @@ pub const M68k = struct {
     }
 
     fn invalidateICache(self: *M68k) void {
-        for (&self.icache) |*line| {
-            line.* = .{ .valid = false, .tag = 0, .data = 0 };
+        for (&self.icache) |*set| {
+            for (set) |*line| {
+                line.* = .{ .valid = false, .tag = 0, .data = 0, .lru = false };
+            }
         }
     }
 
@@ -485,22 +637,50 @@ pub const M68k = struct {
             return .{ .opcode = try self.memory.read16Bus(addr, access), .penalty_cycles = 0 };
         }
         const long_addr = addr >> 2;
-        const index: usize = @intCast(long_addr & (ICacheLines - 1));
-        const tag = long_addr >> std.math.log2_int(u32, ICacheLines);
-        const line = self.icache[index];
+        const set_index: usize = @intCast(long_addr & (ICacheSets - 1));
+        const tag = long_addr >> std.math.log2_int(u32, ICacheSets);
         const use_low_word = (addr & 0x2) != 0;
-        if (line.valid and line.tag == tag) {
-            self.icache_hit_count += 1;
-            const opcode: u16 = if (use_low_word)
-                @truncate(line.data & 0xFFFF)
-            else
-                @truncate(line.data >> 16);
-            return .{ .opcode = opcode, .penalty_cycles = 0 };
+        
+        // Way lookup
+        for (0..ICacheWays) |way| {
+            var line = &self.icache[set_index][way];
+            if (line.valid and line.tag == tag) {
+                self.icache_hit_count += 1;
+                line.lru = true; // Mark as recently used
+                // Flip other way's LRU if it was true
+                const other_way = 1 - way;
+                self.icache[set_index][other_way].lru = false;
+                
+                const opcode: u16 = if (use_low_word)
+                    @truncate(line.data & 0xFFFF)
+                else
+                    @truncate(line.data >> 16);
+                return .{ .opcode = opcode, .penalty_cycles = 0 };
+            }
         }
+        
         self.icache_miss_count += 1;
         const aligned_addr = addr & ~@as(u32, 0x3);
         const fetched = try self.memory.read32Bus(aligned_addr, access);
-        self.icache[index] = .{ .valid = true, .tag = tag, .data = fetched };
+        
+        // Replacement policy: find invalid way or use LRU
+        var target_way: usize = 0;
+        if (self.icache[set_index][0].valid and !self.icache[set_index][0].lru) {
+            target_way = 0;
+        } else if (self.icache[set_index][1].valid and !self.icache[set_index][1].lru) {
+            target_way = 1;
+        } else if (!self.icache[set_index][0].valid) {
+            target_way = 0;
+        } else if (!self.icache[set_index][1].valid) {
+            target_way = 1;
+        } else {
+            // Both valid, use the one with lru=false
+            target_way = if (self.icache[set_index][0].lru) @as(usize, 1) else @as(usize, 0);
+        }
+        
+        self.icache[set_index][target_way] = .{ .valid = true, .tag = tag, .data = fetched, .lru = true };
+        self.icache[set_index][1 - target_way].lru = false;
+        
         const opcode: u16 = if (use_low_word)
             @truncate(fetched & 0xFFFF)
         else
@@ -552,7 +732,7 @@ pub const M68k = struct {
         return self.memory.read16(return_pc) catch 0;
     }
 
-    fn enterFaultFrameA(self: *M68k, vector: u8, return_pc: u32, fault_addr: u32, access: memory.BusAccess) !void {
+    fn enterFaultFrameA(self: *M68k, vector: u8, return_pc: u32, fault_addr: u32, access: memory.BusAccess, retry_count: u8) !void {
         const old_sr = self.sr;
         var sr_new = self.sr | FLAG_S;
         sr_new &= ~FLAG_M;
@@ -565,7 +745,7 @@ pub const M68k = struct {
         try self.memory.write32(self.a[7] + 8, fault_addr);
         try self.memory.write16(self.a[7] + 12, buildFormatAAccessWord(access));
         try self.memory.write16(self.a[7] + 14, readFaultInstructionWord(self, return_pc));
-        try self.memory.write16(self.a[7] + 16, 0);
+        try self.memory.write16(self.a[7] + 16, retry_count); // Store retry count in internal register field
         try self.memory.write16(self.a[7] + 18, 0);
         try self.memory.write16(self.a[7] + 20, 0);
         try self.memory.write16(self.a[7] + 22, 0);
@@ -573,11 +753,11 @@ pub const M68k = struct {
     }
 
     fn enterBusErrorFrameA(self: *M68k, return_pc: u32, fault_addr: u32, access: memory.BusAccess) !void {
-        try self.enterFaultFrameA(2, return_pc, fault_addr, access);
+        try self.enterFaultFrameA(2, return_pc, fault_addr, access, self.bus_retry_count);
     }
 
     fn enterAddressErrorFrameA(self: *M68k, return_pc: u32, fault_addr: u32, access: memory.BusAccess) !void {
-        try self.enterFaultFrameA(3, return_pc, fault_addr, access);
+        try self.enterFaultFrameA(3, return_pc, fault_addr, access, 0);
     }
 
     pub fn raiseBusError(self: *M68k, fault_addr: u32, access: memory.BusAccess) !void {
