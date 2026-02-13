@@ -8,6 +8,7 @@ const rbv = @import("hw/rbv.zig");
 const video = @import("hw/video.zig");
 const scsi = @import("hw/scsi.zig");
 const adb = @import("hw/adb.zig");
+const scc_mod = @import("hw/scc.zig");
 const mac_lc = @import("systems/mac_lc.zig");
 const scheduler = @import("core/scheduler.zig");
 
@@ -20,6 +21,7 @@ pub const Rtc = rtc.Rtc;
 pub const Rbv = rbv.Rbv;
 pub const Scsi5380 = scsi.Scsi5380;
 pub const Adb = adb.Adb;
+pub const Scc = scc_mod.Scc;
 pub const MacLcSystem = mac_lc.MacLcSystem;
 pub const Scheduler = scheduler.Scheduler;
 

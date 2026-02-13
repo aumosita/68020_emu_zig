@@ -324,4 +324,13 @@ pub fn build(b: *std.Build) void {
     memory_map_tests.root_module.addImport("m68020", &lib.root_module);
     const run_memory_map_tests = b.addRunArtifact(memory_map_tests);
     test_step.dependOn(&run_memory_map_tests.step);
+
+    const scc_tests = b.addTest(.{
+        .root_source_file = b.path("tests/core/scc_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    scc_tests.root_module.addImport("m68020", &lib.root_module);
+    const run_scc_tests = b.addRunArtifact(scc_tests);
+    test_step.dependOn(&run_scc_tests.step);
 }

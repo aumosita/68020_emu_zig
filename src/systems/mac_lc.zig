@@ -6,6 +6,7 @@ const video = @import("../hw/video.zig");
 const scsi = @import("../hw/scsi.zig");
 const adb = @import("../hw/adb.zig");
 const rtc = @import("../hw/rtc.zig");
+const scc_mod = @import("../hw/scc.zig");
 const Scheduler = @import("../core/scheduler.zig").Scheduler;
 
 pub const MacLcSystem = struct {
@@ -15,6 +16,7 @@ pub const MacLcSystem = struct {
     scsi: scsi.Scsi5380,
     adb: adb.Adb,
     rtc: rtc.Rtc,
+    scc: scc_mod.Scc,
 
     // Scheduler
     scheduler: Scheduler,
@@ -48,6 +50,8 @@ pub const MacLcSystem = struct {
     const VIA1_END_24: u32 = 0x9FFFFF;
     const RBV_BASE_24: u32 = 0xD00000;
     const RBV_END_24: u32 = 0xDFFFFF;
+    const SCC_BASE_24: u32 = 0xC00000;
+    const SCC_END_24: u32 = 0xCFFFFF;
     const ROM_MIRROR_BASE_24: u32 = 0xF00000;
     const ROM_MIRROR_END_24: u32 = 0xFFFFFF;
 
@@ -63,6 +67,8 @@ pub const MacLcSystem = struct {
     const VDAC_END_32: u32 = 0x50024FFF;
     const RBV_BASE_32: u32 = 0x50026000;
     const RBV_END_32: u32 = 0x50027FFF;
+    const SCC_BASE_32: u32 = 0x50004000;
+    const SCC_END_32: u32 = 0x50005FFF;
     const VRAM_BASE_32: u32 = 0x50F40000;
 
     const ROM_SIZE_MAX: u32 = 512 * 1024; // 512KB
@@ -76,6 +82,7 @@ pub const MacLcSystem = struct {
         sys.scsi = scsi.Scsi5380.init();
         sys.adb = adb.Adb.init();
         sys.rtc = rtc.Rtc.init();
+        sys.scc = scc_mod.Scc.init();
         sys.scheduler = Scheduler.init(allocator);
         sys.address_mode_32 = false; // Default to 24-bit
         sys.rom_overlay = true; // Overlay active after reset
@@ -184,6 +191,9 @@ pub const MacLcSystem = struct {
         if (addr >= RBV_BASE_32 and addr <= RBV_END_32) {
             return self.rbv.read(@truncate((addr >> 9) & 0xF));
         }
+        if (addr >= SCC_BASE_32 and addr <= SCC_END_32) {
+            return self.scc.read(addr);
+        }
         if (addr >= VRAM_BASE_32) {
             const offset = addr - VRAM_BASE_32;
             if (offset + size <= self.video.vram.len) {
@@ -229,6 +239,11 @@ pub const MacLcSystem = struct {
         // SCSI (0x580000-0x5FFFFF)
         if (addr >= SCSI_BASE_24 and addr <= SCSI_END_24) {
             return self.scsi.read(@truncate((addr >> 4) & 0x7));
+        }
+
+        // SCC (0xC00000-0xCFFFFF)
+        if (addr >= SCC_BASE_24 and addr <= SCC_END_24) {
+            return self.scc.read(addr);
         }
 
         // RAM region — let it fall through to memory.data[]
@@ -298,6 +313,10 @@ pub const MacLcSystem = struct {
             self.rbv.write(@truncate((addr >> 9) & 0xF), val8);
             return true;
         }
+        if (addr >= SCC_BASE_32 and addr <= SCC_END_32) {
+            self.scc.write(addr, val8);
+            return true;
+        }
         return false;
     }
 
@@ -330,6 +349,12 @@ pub const MacLcSystem = struct {
         // SCSI
         if (addr >= SCSI_BASE_24 and addr <= SCSI_END_24) {
             self.scsi.write(@truncate((addr >> 4) & 0x7), val8);
+            return true;
+        }
+
+        // SCC
+        if (addr >= SCC_BASE_24 and addr <= SCC_END_24) {
+            self.scc.write(addr, val8);
             return true;
         }
 
