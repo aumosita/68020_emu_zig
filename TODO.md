@@ -141,12 +141,6 @@
   - ✅ 희소 인코딩(bitfield/packed decimal/exception return PC) subset 벡터 우선 연동(`external_vectors/subset`)
   - ✅ `zig build test` 경로와 CI(`.github/workflows/ci.yml`)에서 subset 자동 실행
 
-- FPU(MC68881) 인터페이스 구체화(장기)
-  - FPU 상태 레지스터/예외 플래그 최소 모델(FPSR/FPCR/FPIAR) 정의
-  - 코어와 분리된 플러그인 인터페이스(컨텍스트 단위)로 연산 백엔드 연결
-  - 1차는 subset 명령(FMOVE/FADD/FMUL) 우선, 이후 80-bit extended 정밀도 강화
-  - 완료 기준: 명령 subset 정확도 테스트 + 정밀도/예외 정책 문서화
-
 ## 후속 유지보수 모음
 
 - 예외 프레임 정확도 보강 시 stack/frame 상호영향 회귀 유지
@@ -216,13 +210,6 @@
   - 플러그인 예제 및 가이드 문서 작성
 
 ### 장기 과제
-
-- **FPU 우선순위 상향**
-  - 현재: 낮음 → 제안: 중간으로 상향
-  - 이유: 과학 계산/그래픽 애플리케이션 에뮬레이션 수요
-  - Phase 1: FMOVE/FADD/FMUL/FDIV 기본 연산
-  - Phase 2: 80-bit extended precision 지원
-  - Phase 3: 예외 처리(overflow/underflow/NaN) 정밀도
 
 - **PMMU 완전 구현**
   - 현재: 최소 호환 레이어만 존재
