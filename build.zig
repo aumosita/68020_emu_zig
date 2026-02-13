@@ -315,4 +315,13 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_interrupt_propagation_tests.step);
     test_step.dependOn(&run_scsi_tests.step);
     test_step.dependOn(&run_adb_tests.step);
+
+    const memory_map_tests = b.addTest(.{
+        .root_source_file = b.path("tests/integration/memory_map_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    memory_map_tests.root_module.addImport("m68020", &lib.root_module);
+    const run_memory_map_tests = b.addRunArtifact(memory_map_tests);
+    test_step.dependOn(&run_memory_map_tests.step);
 }

@@ -25,12 +25,14 @@
     - [x] 가상 키보드(Address 2) / 마우스(Address 3) 디바이스 및 SRQ 지원.
 
 ### 메모리 및 시스템 맵
-- [ ] **Mac LC 메모리 맵 최종 구성**
-    - ROM (0x400000 등) 로딩 및 미러링 로직 검증.
-    - RAM 동적 크기 할당 및 VRAM과의 주소 공간 매핑 확인.
-- [ ] **ROM 부팅 시도 및 Trap 핸들링**
-    - 실제 ROM 이미지를 로드하여 초기화 코드 실행 시도.
-    - `A-Line` (Toolbox) 및 `F-Line` Trap 예외 처리의 정확성 검증.
+- [x] **Mac LC 메모리 맵 최종 구성**
+    - [x] ROM Overlay (리셋 시 0x000000에 ROM 매핑, ROM 영역 접근 시 해제)
+    - [x] 24-bit/32-bit 메모리 맵 완전 구현 (RAM/ROM/MMIO 영역)
+    - [x] ROM 미러링 (0x400000 = 0xF00000), ROM 읽기 전용
+    - [x] ROM 파일 로딩 구현
+- [x] **ROM 부팅 시도 및 Trap 핸들링**
+    - [x] ROM Overlay를 통한 CPU 리셋 벡터 전달 구현
+    - [x] A-Line / F-Line Trap 예외 처리 (기존 구현 확인 완료)
 
 ---
 
