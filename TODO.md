@@ -158,6 +158,8 @@
 
 ### 높은 우선순위
 
+#### 코드 품질
+
 - **코드 모듈화 개선**
   - `cpu.zig` 분리: 예외 처리(`exception.zig`), 인터럽트(`interrupt.zig`), 레지스터 접근(`registers.zig`)
   - 목표: 단일 파일 3,600줄 → 각 모듈 1,000줄 이하로 분할
@@ -168,17 +170,36 @@
   - C API 에러 매핑 함수(`mapMemoryError` 등) 확장 및 문서화
   - 목표: 타입 안전성 강화, 디버깅 효율성 향상
 
+#### 버스 및 사이클 정밀성 (Phase 1)
+
+- **버스 사이클 상태 머신 구현**
+  - S0-S1-S2-SW-S3 상태 모델링
+  - Wait state 주입 지원
+  - 외부 느린 주변장치(ROM, UART) 타이밍 재현
+  - 작업량: 2-3일
+  - 참조: `docs/bus-cycle-precision-roadmap.md`
+
+- **EA(Effective Address) 계산 사이클 세분화**
+  - EA 모드별 사이클 테이블 정의 (68020 User's Manual 기준)
+  - `(An)`, `(An)+`, `-(An)`, `(d16,An)`, `(d8,An,Xn)` 등 각 모드 고정
+  - 작업량: 2일
+  - 회귀 테스트: 각 EA 모드별 사이클 assertion 추가
+
+- **타이밍 회귀 테스트 자동화**
+  - Golden reference 기반 자동 테스트
+  - 외부 검증 벡터에 기대 사이클 포함
+  - CI에서 타이밍 변동 자동 탐지
+  - 작업량: 3일
+  - 목표: Phase 1 기본 명령어 사이클 정확도 95% 달성
+
 ### 중간 우선순위
+
+#### 성능 최적화
 
 - **메모리 할당 최적화**
   - Arena allocator 도입으로 빠른 할당/해제 경로 추가
   - Context별 allocator 풀링으로 멀티스레드 성능 개선
   - 벤치마크 목표: 멀티 인스턴스 생성/파괴 처리량 50% 향상
-
-- **I-Cache 구조 개선**
-  - 현재: 64 entry direct-mapped → 제안: 2-way set associative
-  - 충돌 감소로 히트율 향상 기대 (벤치 워크로드 기준 측정 필요)
-  - 옵션 플래그로 기존 모델과 병행 지원
 
 - **테스트 통합 및 자동화**
   - 통합 테스트 러너 추가 (`zig build test-all`)
@@ -186,7 +207,31 @@
   - Coverage 도구 연동 검토 (kcov, Zig 0.14+ 네이티브 지원 대기)
   - CI/CD 성능 회귀 검사 통합 (벤치마크 자동 실행 + 추이 그래프)
 
+#### 버스 및 사이클 정밀성 (Phase 2)
+
+- **버스 에러 복구 메커니즘 강화**
+  - 버스 에러 발생 시 재시도 카운터 추가 (최대 3회)
+  - 재시도 실패 시 예외 프레임에 시도 횟수 기록
+  - API: `setBusRetryLimit`, `getBusRetryCount`
+  - 작업량: 1일
+
+- **I-Cache 2-way set associative 개선**
+  - 현재: 64 entry direct-mapped → 32 set x 2-way
+  - LRU(Least Recently Used) 교체 정책
+  - 히트율 10-15% 향상 예상 (벤치 워크로드 기준 측정)
+  - 옵션 플래그로 기존 모델과 병행 지원
+  - 작업량: 2일
+
+- **사이클 프로파일러**
+  - 명령어별 누적 사이클 통계 수집
+  - 핫스팟(hotspot) 명령 자동 식별
+  - 출력: Top 10 cycle consumers 리포트
+  - 작업량: 2일
+  - 목표: Phase 2 벤치마크 실칩 오차 ±5% 이내
+
 ### 낮은 우선순위
+
+#### 문서 및 예제
 
 - **문서 자동화**
   - Zig doc comments 표준화
@@ -208,6 +253,30 @@
   - 주변장치(PIC/Timer/UART) 동적 로딩 지원
   - 사용자 정의 버스 컨트롤러 등록 API 강화
   - 플러그인 예제 및 가이드 문서 작성
+
+#### 버스 및 사이클 정밀성 (Phase 3)
+
+- **파이프라인 스톨 모델 고도화**
+  - Fetch-Decode-Execute-WriteBack 4단계 파이프라인 상태 머신
+  - Data dependency stall (RAW hazard 검출)
+  - Branch prediction (1-bit predictor)
+  - Memory access contention 모델링
+  - 작업량: 5-7일
+
+- **DMA 채널 시뮬레이션**
+  - 간단한 DMA 컨트롤러 stub (`src/platform/dma.zig`)
+  - CPU 사이클 중 버스 중재(arbitration) 시뮬레이션
+  - DMA 전송 중 CPU halt/resume 타이밍 모델링
+  - 사용 사례: Amiga/Atari ST 디스크/비디오 I/O
+  - 작업량: 3-4일
+
+- **실칩 비교 벤치마크**
+  - 실제 68020 보드에서 동일 코드 실행
+  - 사이클 카운터 측정값과 비교
+  - 차이 분석 리포트 생성
+  - 필요 하드웨어: 68020 개발 보드, 로직 분석기
+  - 작업량: 하드웨어 확보 후 1주
+  - 목표: Phase 3 사이클 정확도 99%, 실칩 오차 ±3% 이내
 
 ### 장기 과제
 
