@@ -998,7 +998,8 @@ test "M68k pipeline approx mode applies EA-write overlap discount on memory dest
     try m68k_off.memory.write16(0x1100, 0x2080); // MOVE.L D0,(A0)
     m68k_off.pc = 0x1100;
     const off_cycles = try m68k_off.step();
-    try std.testing.expectEqual(@as(u32, 6), off_cycles);
+    // MOVE.L D0,(A0): 4 (base) + 0 (src reg) + 4 (dst indirect) = 8
+    try std.testing.expectEqual(@as(u32, 8), off_cycles);
 
     var m68k_approx = M68k.init(allocator);
     defer m68k_approx.deinit();
@@ -1008,7 +1009,8 @@ test "M68k pipeline approx mode applies EA-write overlap discount on memory dest
     try m68k_approx.memory.write16(0x1100, 0x2080); // MOVE.L D0,(A0)
     m68k_approx.pc = 0x1100;
     const approx_cycles = try m68k_approx.step();
-    try std.testing.expectEqual(@as(u32, 5), approx_cycles);
+    // approx mode: 8 (base) - 1 (overlap) = 7
+    try std.testing.expectEqual(@as(u32, 7), approx_cycles);
 }
 
 test "M68k ADDQ long data-register fast path preserves flags and cycles" {
@@ -1139,9 +1141,9 @@ test "M68k split bus cycle penalty adds data-path overhead independent of semant
     try m68k.memory.write16(0x0100, 0x2080); // MOVE.L D0,(A0)
     m68k.pc = 0x0100;
 
-    // Base model 6 cycles + fetch split(1) + data write split(3) = 10.
+    // MOVE.L D0,(A0): base 8 cycles (4+0+4) + fetch split(1) + data write split(3) = 12
     const cycles = try m68k.step();
-    try std.testing.expectEqual(@as(u32, 10), cycles);
+    try std.testing.expectEqual(@as(u32, 12), cycles);
     try std.testing.expectEqual(@as(u32, 0xAABBCCDD), try m68k.memory.read32(0x0200));
 }
 
@@ -2514,7 +2516,8 @@ test "M68k ComplexEA execute path - read and write" {
     m68k.pc = 0x200;
     const complex_read_cycles = try m68k.executor.execute(&m68k, &read_inst);
     try std.testing.expectEqual(@as(u32, 0xDEADBEEF), m68k.d[0]);
-    try std.testing.expectEqual(@as(u32, 8), complex_read_cycles);
+    // ComplexEA with index: 4 (base) + 10 (src EA) + 0 (dst reg) = 14
+    try std.testing.expectEqual(@as(u32, 14), complex_read_cycles);
 
     m68k.d[2] = 0xAABBCCDD;
     var write_inst = decoder.Instruction.init();
@@ -2526,7 +2529,8 @@ test "M68k ComplexEA execute path - read and write" {
 
     const complex_write_cycles = try m68k.executor.execute(&m68k, &write_inst);
     try std.testing.expectEqual(@as(u32, 0xAABBCCDD), try m68k.memory.read32(0x1014));
-    try std.testing.expectEqual(@as(u32, 8), complex_write_cycles);
+    // ComplexEA with index: 4 (base) + 0 (src reg) + 10 (dst EA) = 14
+    try std.testing.expectEqual(@as(u32, 14), complex_write_cycles);
 }
 
 test "M68k PACK/UNPK register and memory forms" {
@@ -2991,7 +2995,8 @@ test "M68k data access translator remaps execute write while preserving logical 
     m68k.setSR(0x2000);
     m68k.dfc = 0b011;
 
-    try std.testing.expectEqual(@as(u32, 6), try m68k.step());
+    // MOVE.W D0,(A0): 4 (base) + 0 (src reg) + 4 (dst indirect) = 8
+    try std.testing.expectEqual(@as(u32, 8), try m68k.step());
     try std.testing.expectEqual(@as(u16, 0x1234), try m68k.memory.read16(0x1300)); // translated target
     try std.testing.expectEqual(@as(u16, 0x0000), try m68k.memory.read16(0x0300)); // logical location unchanged
     try std.testing.expect(ctx.saw_data_write);

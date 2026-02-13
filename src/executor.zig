@@ -2,6 +2,7 @@ const std = @import("std");
 const cpu = @import("cpu.zig");
 const decoder = @import("decoder.zig");
 const memory = @import("memory.zig");
+const ea_cycles = @import("ea_cycles.zig");
 
 pub const Executor = struct {
     pub fn init() Executor { return .{}; }
@@ -115,13 +116,14 @@ fn executeMoveq(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
 fn executeMove(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const v = try getOperandValue(m, i.src, i.data_size);
     try setOperandValue(m, i.dst, v, i.data_size); m.setFlags(v, i.data_size); m.pc += i.size;
-    const base = 4 + getEACycles(i.src, i.data_size, true) + getEACycles(i.dst, i.data_size, false);
-    return applyPipelineEaWriteOverlap(m, i.dst, base);
+    const cycles = ea_cycles.getMoveCycles(i.src, i.dst, i.data_size);
+    return applyPipelineEaWriteOverlap(m, i.dst, cycles);
 }
 fn executeMovea(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const r = switch (i.dst) { .AddrReg => |v| v, else => return error.Err };
     var v = try getOperandValue(m, i.src, i.data_size); if (i.data_size == .Word) v = @bitCast(@as(i32, @as(i16, @bitCast(@as(u16, @truncate(v))))));
-    m.a[r] = v; m.pc += i.size; return 4 + getEACycles(i.src, i.data_size, true);
+    m.a[r] = v; m.pc += i.size;
+    return 4 + ea_cycles.getEACycles(i.src, i.data_size, true);
 }
 fn executeAdd(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const dir = (i.opcode >> 8) & 1;
@@ -1260,7 +1262,11 @@ fn subBcd(d: u8, s: u8, x: bool) struct { result: u8, carry: bool } {
     return .{ .result = (@as(u8, @truncate(@as(u16, @bitCast(hi)))) << 4) | @as(u8, @truncate(@as(u16, @bitCast(lo)))), .carry = c };
 }
 fn isMem(op: decoder.Operand) bool { return switch (op) { .DataReg, .AddrReg, .None => false, else => true }; }
-fn getEACycles(op: decoder.Operand, _: decoder.DataSize, _: bool) u32 { return switch (op) { .DataReg, .AddrReg => 0, .Immediate8, .Immediate16, .Immediate32 => 0, .AddrIndirect, .AddrPostInc => 2, .AddrPreDec, .AddrDisplace => 3, else => 4 }; }
+
+// 레거시 호환성을 위한 wrapper (추후 제거 예정)
+fn getEACycles(op: decoder.Operand, data_size: decoder.DataSize, is_read: bool) u32 {
+    return ea_cycles.getEACycles(op, data_size, is_read);
+}
 const InstructionCycles = struct {
     pub fn get(m: decoder.Mnemonic, _: decoder.DataSize, mem: bool) u32 { return switch (m) { .MOVE => if (mem) 4 else 2, .MOVEQ => 2, .ADD, .SUB => if (mem) 4 else 2, .MULU, .MULS => 25, .DIVU, .DIVS => 45, .RTS => 10, .RTE => 15, .TRAP => 25, else => 4 }; }
 };
