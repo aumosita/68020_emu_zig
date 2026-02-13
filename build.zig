@@ -34,7 +34,7 @@ pub fn build(b: *std.Build) void {
     // Shift/Rotate test executable
     const shift_test = b.addExecutable(.{
         .name = "m68020-emu-test-shift",
-        .root_source_file = b.path("src/test_shift.zig"),
+        .root_source_file = b.path("src/core/test_shift.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -43,7 +43,7 @@ pub fn build(b: *std.Build) void {
     // Bit operations test executable
     const bits_test = b.addExecutable(.{
         .name = "m68020-emu-test-bits",
-        .root_source_file = b.path("src/test_bits.zig"),
+        .root_source_file = b.path("src/core/test_bits.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -52,7 +52,7 @@ pub fn build(b: *std.Build) void {
     // Stack operations test executable
     const stack_test = b.addExecutable(.{
         .name = "m68020-emu-test-stack",
-        .root_source_file = b.path("src/test_stack.zig"),
+        .root_source_file = b.path("src/core/test_stack.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -61,7 +61,7 @@ pub fn build(b: *std.Build) void {
     // Phase 1 test executable
     const phase1_test = b.addExecutable(.{
         .name = "m68020-emu-test-phase1",
-        .root_source_file = b.path("src/test_phase1.zig"),
+        .root_source_file = b.path("src/core/test_phase1.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -70,7 +70,7 @@ pub fn build(b: *std.Build) void {
     // Phase 2 test executable
     const phase2_test = b.addExecutable(.{
         .name = "m68020-emu-test-phase2",
-        .root_source_file = b.path("src/test_phase2.zig"),
+        .root_source_file = b.path("src/core/test_phase2.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -79,7 +79,7 @@ pub fn build(b: *std.Build) void {
     // Phase 3 test executable
     const phase3_test = b.addExecutable(.{
         .name = "m68020-emu-test-phase3",
-        .root_source_file = b.path("src/test_phase3.zig"),
+        .root_source_file = b.path("src/core/test_phase3.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -88,7 +88,7 @@ pub fn build(b: *std.Build) void {
     // BCD test executable
     const bcd_test = b.addExecutable(.{
         .name = "m68020-emu-test-bcd",
-        .root_source_file = b.path("src/test_bcd.zig"),
+        .root_source_file = b.path("src/core/test_bcd.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -97,7 +97,7 @@ pub fn build(b: *std.Build) void {
     // 68020 test executable
     const test_68020 = b.addExecutable(.{
         .name = "m68020-emu-test-68020",
-        .root_source_file = b.path("src/test_68020.zig"),
+        .root_source_file = b.path("src/core/test_68020.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -106,7 +106,7 @@ pub fn build(b: *std.Build) void {
     // Cycle accurate demo
     const cycle_demo = b.addExecutable(.{
         .name = "cycle-accurate-demo",
-        .root_source_file = b.path("src/test_cycle_accurate.zig"),
+        .root_source_file = b.path("src/core/test_cycle_accurate.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -233,14 +233,22 @@ pub fn build(b: *std.Build) void {
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 
     const external_vector_tests = b.addTest(.{
-        .root_source_file = b.path("src/external_vectors.zig"),
+        .root_source_file = b.path("src/core/external_vectors.zig"),
         .target = target,
         .optimize = optimize,
     });
     const run_external_vector_tests = b.addRunArtifact(external_vector_tests);
 
+    const mac_lc_tests = b.addTest(.{
+        .root_source_file = b.path("src/test_mac_lc.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const run_mac_lc_tests = b.addRunArtifact(mac_lc_tests);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_exe_unit_tests.step);
     test_step.dependOn(&run_external_vector_tests.step);
+    test_step.dependOn(&run_mac_lc_tests.step);
 }

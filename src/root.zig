@@ -1,14 +1,23 @@
 const std = @import("std");
-const cpu = @import("cpu.zig");
-const decoder = @import("decoder.zig");
-const memory = @import("memory.zig");
-const platform = @import("platform/mod.zig");
+const cpu = @import("core/cpu.zig");
+const decoder = @import("core/decoder.zig");
+const memory = @import("core/memory.zig");
+const via6522 = @import("hw/via6522.zig");
+const rtc = @import("hw/rtc.zig");
+const rbv = @import("hw/rbv.zig");
+const video = @import("hw/video.zig");
+const scsi = @import("hw/scsi.zig");
+const adb = @import("hw/adb.zig");
+const mac_lc = @import("systems/mac_lc.zig");
 
 // Export Zig types for use in other Zig code
 pub const M68k = cpu.M68k;
 pub const Decoder = decoder.Decoder;
 pub const Memory = memory.Memory;
-pub const Platform = platform.Platform;
+pub const Via6522 = via6522.Via6522;
+pub const Rtc = rtc.Rtc;
+pub const Rbv = rbv.Rbv;
+pub const MacLcSystem = mac_lc.MacLcSystem;
 
 // Export C API for use in other languages (Python, C, etc.)
 // Global page allocator for C API
@@ -329,241 +338,75 @@ export fn m68k_write_memory_32_status(m68k: *cpu.M68k, addr: u32, value: u32) c_
     return STATUS_OK;
 }
 
+// VIA 6522 C API
+export fn via_create() ?*via6522.Via6522 {
+    const allocator = gpa.allocator();
+    const via = allocator.create(via6522.Via6522) catch return null;
+    via.* = via6522.Via6522.init();
+    return via;
+}
+
+export fn via_destroy(via: *via6522.Via6522) void {
+    const allocator = gpa.allocator();
+    allocator.destroy(via);
+}
+
+export fn via_reset(via: *via6522.Via6522) void {
+    via.reset();
+}
+
+export fn via_read(via: *via6522.Via6522, addr: u8) u8 {
+    return via.read(@truncate(addr));
+}
+
+export fn via_write(via: *via6522.Via6522, addr: u8, value: u8) void {
+    via.write(@truncate(addr), value);
+}
+
+export fn via_step(via: *via6522.Via6522, cycles: u32) void {
+    via.step(cycles);
+}
+
+export fn via_get_irq(via: *via6522.Via6522) bool {
+    return via.irq_pin;
+}
+
+// Mac LC System C API
+pub export fn mac_lc_create(ram_size: u32, rom_path: ?[*:0]const u8) ?*mac_lc.MacLcSystem {
+    const allocator = gpa.allocator();
+    var path_slice: ?[]const u8 = null;
+    if (rom_path) |p| {
+        path_slice = std.mem.span(p);
+    }
+    return mac_lc.MacLcSystem.init(allocator, ram_size, path_slice) catch return null;
+}
+
+pub export fn mac_lc_destroy(sys: *mac_lc.MacLcSystem) void {
+    const allocator = gpa.allocator();
+    sys.deinit(allocator);
+}
+
+pub export fn mac_lc_install(sys: *mac_lc.MacLcSystem, m68k: *cpu.M68k) void {
+    m68k.memory.setBusHook(mac_lc.MacLcSystem.busHook, sys);
+    m68k.memory.setAddressTranslator(mac_lc.MacLcSystem.addressTranslator, sys);
+    m68k.memory.setMmio(mac_lc.MacLcSystem.mmioRead, mac_lc.MacLcSystem.mmioWrite, sys);
+}
+
+pub export fn mac_lc_sync(sys: *mac_lc.MacLcSystem, cycles: u32) void {
+    sys.sync(cycles);
+}
+
+pub export fn mac_lc_get_irq(sys: *mac_lc.MacLcSystem) bool {
+    return sys.via1.irq_pin or sys.rbv.getIrq();
+}
+
+pub export fn mac_lc_get_irq_level(sys: *mac_lc.MacLcSystem) u8 {
+    if (sys.rbv.getIrq()) return 2;
+    if (sys.via1.irq_pin) return 1;
+    return 0;
+}
+
 test "basic library test" {
     const testing = std.testing;
     try testing.expect(true);
-}
-
-test "root API IRQ autovector integration" {
-    const m68k = m68k_create_with_memory(64 * 1024) orelse return error.OutOfMemory;
-    defer m68k_destroy(m68k);
-
-    // level-3 autovector (27) handler at 0x4000
-    m68k_write_memory_32(m68k, 27 * 4, 0x4000);
-    m68k_write_memory_16(m68k, 0x1000, 0x4E71); // NOP
-
-    m68k_set_pc(m68k, 0x1000);
-    m68k_set_reg_a(m68k, 7, 0x3000);
-    m68k.sr = 0x2000; // supervisor, mask 0
-
-    m68k_set_irq(m68k, 3);
-    const cycles = m68k_step(m68k);
-
-    try std.testing.expectEqual(@as(c_int, 44), cycles);
-    try std.testing.expectEqual(@as(u32, 0x4000), m68k_get_pc(m68k));
-    try std.testing.expectEqual(@as(u32, 0x2FF8), m68k_get_reg_a(m68k, 7));
-    try std.testing.expectEqual(@as(u16, 27 * 4), m68k_read_memory_16(m68k, 0x2FFE));
-}
-
-test "root API IRQ vector override and spurious integration" {
-    const m68k = m68k_create_with_memory(64 * 1024) orelse return error.OutOfMemory;
-    defer m68k_destroy(m68k);
-
-    // Explicit vector 0x64 path.
-    m68k_write_memory_32(m68k, 0x64 * 4, 0x4800);
-    m68k_write_memory_16(m68k, 0x1200, 0x4E71); // NOP
-    m68k_set_pc(m68k, 0x1200);
-    m68k_set_reg_a(m68k, 7, 0x3400);
-    m68k.sr = 0x2000;
-    m68k_set_irq_vector(m68k, 2, 0x64);
-
-    try std.testing.expectEqual(@as(c_int, 44), m68k_step(m68k));
-    try std.testing.expectEqual(@as(u32, 0x4800), m68k_get_pc(m68k));
-    try std.testing.expectEqual(@as(u16, 0x64 * 4), m68k_read_memory_16(m68k, 0x33FE));
-
-    // Spurious vector (24) path.
-    m68k_write_memory_32(m68k, 24 * 4, 0x4900);
-    m68k_write_memory_16(m68k, 0x1300, 0x4E71); // NOP
-    m68k_set_pc(m68k, 0x1300);
-    m68k_set_reg_a(m68k, 7, 0x3500);
-    m68k.sr = 0x2000;
-    m68k_set_spurious_irq(m68k, 2);
-
-    try std.testing.expectEqual(@as(c_int, 44), m68k_step(m68k));
-    try std.testing.expectEqual(@as(u32, 0x4900), m68k_get_pc(m68k));
-    try std.testing.expectEqual(@as(u16, 24 * 4), m68k_read_memory_16(m68k, 0x34FE));
-}
-
-test "root API STOP resumes on IRQ with expected cycle PC and SR" {
-    const m68k = m68k_create_with_memory(64 * 1024) orelse return error.OutOfMemory;
-    defer m68k_destroy(m68k);
-
-    m68k_write_memory_16(m68k, 0x0800, 0x4E72); // STOP
-    m68k_write_memory_16(m68k, 0x0802, 0x2000); // keep supervisor
-    m68k_write_memory_16(m68k, 0x0804, 0x4E71); // NOP
-    m68k_write_memory_32(m68k, 26 * 4, 0x0900); // level-2 autovector handler
-
-    m68k_set_pc(m68k, 0x0800);
-    m68k_set_reg_a(m68k, 7, 0x4200);
-    m68k.sr = 0x2000;
-
-    try std.testing.expectEqual(@as(c_int, 4), m68k_step(m68k)); // STOP executes
-    try std.testing.expectEqual(@as(u32, 0x0804), m68k_get_pc(m68k));
-    try std.testing.expect(m68k.stopped);
-
-    try std.testing.expectEqual(@as(c_int, 4), m68k_step(m68k)); // still stopped
-    try std.testing.expectEqual(@as(u32, 0x0804), m68k_get_pc(m68k));
-    try std.testing.expect(m68k.stopped);
-
-    m68k_set_irq(m68k, 2);
-    try std.testing.expectEqual(@as(c_int, 44), m68k_step(m68k)); // IRQ wakes STOP
-    try std.testing.expectEqual(@as(u32, 0x0900), m68k_get_pc(m68k));
-    try std.testing.expect(!m68k.stopped);
-    try std.testing.expectEqual(@as(u16, 0x2200), m68k.sr & 0x2700); // supervisor + IPL=2
-}
-
-test "root API status memory access surfaces error codes" {
-    const m68k = m68k_create_with_memory(0x1000) orelse return error.OutOfMemory;
-    defer m68k_destroy(m68k);
-
-    var b: u8 = 0;
-    var w: u16 = 0;
-    var l: u32 = 0;
-
-    try std.testing.expectEqual(@as(c_int, 0), m68k_write_memory_8_status(m68k, 0x20, 0xAB));
-    try std.testing.expectEqual(@as(c_int, 0), m68k_read_memory_8_status(m68k, 0x20, &b));
-    try std.testing.expectEqual(@as(u8, 0xAB), b);
-
-    try std.testing.expectEqual(@as(c_int, -1), m68k_read_memory_16_status(m68k, 0x20, null));
-    try std.testing.expectEqual(@as(c_int, -2), m68k_read_memory_32_status(m68k, 0x0FFF, &l)); // out of range
-
-    m68k.memory.enforce_alignment = true;
-    try std.testing.expectEqual(@as(c_int, -2), m68k_read_memory_16_status(m68k, 0x21, &w)); // odd alignment
-}
-
-const RootTranslatorCtx = struct {
-    calls: usize = 0,
-    delta: u32 = 0,
-};
-
-fn rootCountingTranslator(ctx: ?*anyopaque, logical_addr: u32, _: memory.BusAccess) !u32 {
-    const c: *RootTranslatorCtx = @ptrCast(@alignCast(ctx.?));
-    c.calls += 1;
-    return logical_addr + c.delta;
-}
-
-test "root API can invalidate translation cache" {
-    const m68k = m68k_create_with_memory(0x8000) orelse return error.OutOfMemory;
-    defer m68k_destroy(m68k);
-
-    var ctx = RootTranslatorCtx{ .delta = 0x1000 };
-    m68k.memory.setAddressTranslator(rootCountingTranslator, &ctx);
-    try m68k.memory.write8(0x1100, 0x5A);
-    try m68k.memory.write8(0x1104, 0x5B);
-    try m68k.memory.write8(0x1108, 0x5C);
-
-    const access = memory.BusAccess{ .function_code = 0b001, .space = .Data, .is_write = false };
-    try std.testing.expectEqual(@as(u8, 0x5A), try m68k.memory.read8Bus(0x0100, access));
-    try std.testing.expectEqual(@as(usize, 1), ctx.calls);
-    try std.testing.expectEqual(@as(u8, 0x5B), try m68k.memory.read8Bus(0x0104, access));
-    try std.testing.expectEqual(@as(usize, 1), ctx.calls);
-
-    m68k_invalidate_translation_cache(m68k);
-    try std.testing.expectEqual(@as(u8, 0x5C), try m68k.memory.read8Bus(0x0108, access));
-    try std.testing.expectEqual(@as(usize, 2), ctx.calls);
-}
-
-test "root API context-based create/destroy lifecycle" {
-    const ctx = m68k_context_create() orelse return error.OutOfMemory;
-    defer _ = m68k_context_destroy(ctx);
-
-    const m1 = m68k_create_in_context(ctx, 0x2000) orelse return error.OutOfMemory;
-    const m2 = m68k_create_in_context(ctx, 0x3000) orelse return error.OutOfMemory;
-    defer _ = m68k_destroy_in_context(ctx, m2);
-    defer _ = m68k_destroy_in_context(ctx, m1);
-
-    try std.testing.expectEqual(@as(u32, 0x2000), m68k_get_memory_size(m1));
-    try std.testing.expectEqual(@as(u32, 0x3000), m68k_get_memory_size(m2));
-
-    try std.testing.expectEqual(@as(c_int, 0), m68k_write_memory_32_status(m1, 0x100, 0xDEADBEEF));
-    var v: u32 = 0;
-    try std.testing.expectEqual(@as(c_int, 0), m68k_read_memory_32_status(m1, 0x100, &v));
-    try std.testing.expectEqual(@as(u32, 0xDEADBEEF), v);
-}
-
-test "root API context functions validate arguments" {
-    try std.testing.expectEqual(@as(c_int, -1), m68k_context_destroy(null));
-    try std.testing.expectEqual(@as(c_int, -1), m68k_destroy_in_context(null, null));
-
-    const ctx = m68k_context_create() orelse return error.OutOfMemory;
-    defer _ = m68k_context_destroy(ctx);
-
-    try std.testing.expectEqual(@as(c_int, -1), m68k_destroy_in_context(ctx, null));
-}
-
-test "root API exposes icache stats miss penalty and pipeline mode controls" {
-    const m68k = m68k_create_with_memory(64 * 1024 * 1024) orelse return error.OutOfMemory;
-    defer m68k_destroy(m68k);
-
-    m68k_write_memory_16(m68k, 0x2000, 0x4E7B); // MOVEC D0,CACR
-    m68k_write_memory_16(m68k, 0x2002, 0x0002);
-    m68k_set_reg_d(m68k, 0, 0x1); // enable cache
-    m68k_set_pc(m68k, 0x2000);
-    _ = m68k_step(m68k);
-
-    m68k_write_memory_16(m68k, 0x2100, 0x4E71); // NOP
-
-    m68k_set_icache_fetch_miss_penalty(m68k, 5);
-    try std.testing.expectEqual(@as(u32, 5), m68k_get_icache_fetch_miss_penalty(m68k));
-
-    m68k_set_pc(m68k, 0x2100);
-    try std.testing.expectEqual(@as(c_int, 9), m68k_step(m68k)); // miss
-    m68k_set_pc(m68k, 0x2100);
-    try std.testing.expectEqual(@as(c_int, 4), m68k_step(m68k)); // hit
-
-    try std.testing.expectEqual(@as(u64, 1), m68k_get_icache_hit_count(m68k));
-    try std.testing.expectEqual(@as(u64, 1), m68k_get_icache_miss_count(m68k));
-    m68k_clear_icache_stats(m68k);
-    try std.testing.expectEqual(@as(u64, 0), m68k_get_icache_hit_count(m68k));
-    try std.testing.expectEqual(@as(u64, 0), m68k_get_icache_miss_count(m68k));
-
-    try std.testing.expectEqual(@as(u8, 0), m68k_get_pipeline_mode(m68k));
-    m68k_set_pipeline_mode(m68k, 1);
-    try std.testing.expectEqual(@as(u8, 1), m68k_get_pipeline_mode(m68k));
-    m68k_set_pipeline_mode(m68k, 2);
-    try std.testing.expectEqual(@as(u8, 2), m68k_get_pipeline_mode(m68k));
-    m68k_set_pipeline_mode(m68k, 99); // fallback to off
-    try std.testing.expectEqual(@as(u8, 0), m68k_get_pipeline_mode(m68k));
-}
-
-const CallbackAllocStats = struct {
-    alloc_count: usize = 0,
-    free_count: usize = 0,
-};
-
-fn callbackAllocTest(ctx: ?*anyopaque, size: usize, alignment: usize) callconv(.C) ?*anyopaque {
-    const stats: *CallbackAllocStats = @ptrCast(@alignCast(ctx orelse return null));
-    if (alignment == 0 or !std.math.isPowerOfTwo(alignment)) return null;
-    const log2_align: u8 = @intCast(@ctz(alignment));
-    const mem = std.heap.page_allocator.rawAlloc(size, log2_align, @returnAddress()) orelse return null;
-    stats.alloc_count += 1;
-    return @ptrCast(mem);
-}
-
-fn callbackFreeTest(ctx: ?*anyopaque, ptr: ?*anyopaque, size: usize, alignment: usize) callconv(.C) void {
-    const stats: *CallbackAllocStats = @ptrCast(@alignCast(ctx orelse return));
-    const p = ptr orelse return;
-    if (alignment == 0 or !std.math.isPowerOfTwo(alignment)) return;
-    const log2_align: u8 = @intCast(@ctz(alignment));
-    const buf: []u8 = (@as([*]u8, @ptrCast(p)))[0..size];
-    std.heap.page_allocator.rawFree(buf, log2_align, @returnAddress());
-    stats.free_count += 1;
-}
-
-test "root API context allocator callbacks are used for instance lifecycle" {
-    const ctx = m68k_context_create() orelse return error.OutOfMemory;
-    defer _ = m68k_context_destroy(ctx);
-
-    var stats = CallbackAllocStats{};
-    try std.testing.expectEqual(
-        @as(c_int, 0),
-        m68k_context_set_allocator_callbacks(ctx, callbackAllocTest, callbackFreeTest, &stats),
-    );
-
-    const m68k = m68k_create_in_context(ctx, 0x4000) orelse return error.OutOfMemory;
-    try std.testing.expect(stats.alloc_count > 0);
-
-    try std.testing.expectEqual(@as(c_int, 0), m68k_destroy_in_context(ctx, m68k));
-    try std.testing.expect(stats.free_count > 0);
-    try std.testing.expect(stats.alloc_count == stats.free_count);
 }

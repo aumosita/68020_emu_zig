@@ -1,11 +1,11 @@
 const std = @import("std");
-const memory = @import("memory.zig");
-const via6522 = @import("via6522.zig");
-const rtc = @import("rtc.zig");
-const rbv = @import("rbv.zig");
-const video = @import("video.zig");
-const scsi = @import("scsi.zig");
-const adb = @import("adb.zig");
+const memory = @import("../core/memory.zig");
+const via6522 = @import("../hw/via6522.zig");
+const rtc = @import("../hw/rtc.zig");
+const rbv = @import("../hw/rbv.zig");
+const video = @import("../hw/video.zig");
+const scsi = @import("../hw/scsi.zig");
+const adb = @import("../hw/adb.zig");
 
 pub const MacLcSystem = struct {
     via1: via6522.Via6522,
@@ -62,11 +62,15 @@ pub const MacLcSystem = struct {
     pub fn busHook(ctx: ?*anyopaque, logical_addr: u32, access: memory.BusAccess) memory.BusSignal {
         const self: *MacLcSystem = @ptrCast(@alignCast(ctx orelse return .bus_error));
         _ = access;
+        
+        // Handle 24-bit address wrapping if in 24-bit mode
         const addr = if (self.address_mode_32) logical_addr else (logical_addr & 0x00FFFFFF);
 
+        // Very basic routing logic for now
         if (self.address_mode_32) {
             if (addr >= 0x50000000 and addr <= 0x5FFFFFFF) return .ok; 
         } else {
+            // 24-bit mode I/O regions
             if (addr >= 0x900000 and addr <= 0x9FFFFF) return .ok; // VIA1
             if (addr >= 0xA00000 and addr <= 0xAFFFFF) return .ok; // SCC
             if (addr >= 0xD00000 and addr <= 0xDFFFFF) return .ok; // VIA2/RBV
