@@ -48,3 +48,6 @@
 
 - `external-vector-runner.md`
   JSON 기반 외부 검증 벡터 로더/subset/CI 연동 가이드
+
+- `bus-cycle-precision-roadmap.md`
+  버스 타이밍 및 사이클 정확도 향상을 위한 단계별 로드맵
