@@ -133,6 +133,9 @@ pub const MacLcSystem = struct {
             if (addr >= 0xD00000 and addr <= 0xDFFFFF) {
                 return self.rbv.read(@truncate((addr >> 9) & 0xF));
             }
+            if (addr >= 0x580000 and addr <= 0x5FFFFF) {
+                return self.scsi.read(@truncate((addr >> 4) & 0x7));
+            }
         }
 
         return null; // Not MMIO, handled by memory (RAM/ROM)
@@ -202,6 +205,10 @@ pub const MacLcSystem = struct {
             }
             if (addr >= 0xD00000 and addr <= 0xDFFFFF) {
                 self.rbv.write(@truncate((addr >> 9) & 0xF), @truncate(val8));
+                return true;
+            }
+            if (addr >= 0x580000 and addr <= 0x5FFFFF) {
+                self.scsi.write(@truncate((addr >> 4) & 0x7), @truncate(val8));
                 return true;
             }
         }

@@ -17,10 +17,12 @@
     - [x] 중첩 인터럽트(Nested Interrupts) 및 우선순위 처리 로직의 Edge Case 검증. (완료: Priority Masking, Spurious, Vectorized 테스트 추가)
 
 ### 주변 장치 프로토콜 고도화
-- [ ] **SCSI (NCR 5380) 정밀화**
-    - 단순 레지스터 구현을 넘어, 실제 OS 드라이버가 요구하는 SCSI Phase(Selection, Command, Data, Status, Message) 전환 로직 구현.
-- [ ] **ADB (Apple Desktop Bus) 통신 구현**
-    - 키보드/마우스 입력 패킷 처리를 위한 비트 타이밍 및 상태 머신(State Machine) 구현.
+- [x] **SCSI (NCR 5380) 정밀화**
+    - [x] SCSI Phase State Machine (BusFree, Arbitration, Selection, InformationTransfer) 구현.
+    - [x] NCR 5380 레지스터 동작 정밀화 (ICR, Mode, TCR, Bus Status, Phase Match).
+- [x] **ADB (Apple Desktop Bus) 통신 구현**
+    - [x] VIA1 ST0/ST1 기반 상태 머신, Talk/Listen/Flush/SendReset 커맨드 파싱.
+    - [x] 가상 키보드(Address 2) / 마우스(Address 3) 디바이스 및 SRQ 지원.
 
 ### 메모리 및 시스템 맵
 - [ ] **Mac LC 메모리 맵 최종 구성**

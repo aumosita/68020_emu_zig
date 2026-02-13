@@ -288,6 +288,22 @@ pub fn build(b: *std.Build) void {
     interrupt_propagation_tests.root_module.addImport("m68020", &lib.root_module);
     const run_interrupt_propagation_tests = b.addRunArtifact(interrupt_propagation_tests);
 
+    const scsi_tests = b.addTest(.{
+        .root_source_file = b.path("tests/core/scsi_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    scsi_tests.root_module.addImport("m68020", &lib.root_module);
+    const run_scsi_tests = b.addRunArtifact(scsi_tests);
+
+    const adb_tests = b.addTest(.{
+        .root_source_file = b.path("tests/core/adb_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    adb_tests.root_module.addImport("m68020", &lib.root_module);
+    const run_adb_tests = b.addRunArtifact(adb_tests);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_exe_unit_tests.step);
@@ -297,4 +313,6 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_interrupts_tests.step);
     test_step.dependOn(&run_video_timing_tests.step);
     test_step.dependOn(&run_interrupt_propagation_tests.step);
+    test_step.dependOn(&run_scsi_tests.step);
+    test_step.dependOn(&run_adb_tests.step);
 }

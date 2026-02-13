@@ -18,6 +18,8 @@ pub const Memory = memory.Memory;
 pub const Via6522 = via6522.Via6522;
 pub const Rtc = rtc.Rtc;
 pub const Rbv = rbv.Rbv;
+pub const Scsi5380 = scsi.Scsi5380;
+pub const Adb = adb.Adb;
 pub const MacLcSystem = mac_lc.MacLcSystem;
 pub const Scheduler = scheduler.Scheduler;
 

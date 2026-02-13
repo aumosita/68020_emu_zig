@@ -338,3 +338,41 @@ const amiga_regions = [_]bus_cycle.WaitStateRegion{
 | 신규 테스트 | `tests/integration/interrupt_propagation.zig` |
 | 테스트 커버리지 | Nested, Priority, Spurious, Vectorized |
 | 버그 수정 | 2건 (Critical) |
+
+---
+
+## Phase 2.7: 주변 장치 프로토콜 고도화 (2026-02-14) ✅
+
+### 작업 기간
+- 시작: 2026-02-14 00:44
+- 완료: 2026-02-14 01:00
+- **총 소요 시간: 약 20분**
+
+### 완료된 작업
+
+#### 1. SCSI NCR 5380 Phase State Machine ✅
+- **신규 구현**: `src/hw/scsi.zig` (56줄 → 290줄)
+- **Phase**: BusFree → Arbitration → Selection → InformationTransfer
+- **레지스터**: ICR (신호 제어), Mode, TCR (Phase 결정), Bus Status, Bus & Status (Phase Match, DRQ, IRQ)
+- **핵심 기능**: Arbitration 승리 판정, Selection 타임아웃 ("디스크 없음" 인식), Bus Reset
+- **테스트**: `tests/core/scsi_test.zig` (7 tests)
+
+#### 2. ADB (Apple Desktop Bus) 프로토콜 ✅
+- **신규 구현**: `src/hw/adb.zig` (31줄 → 410줄)
+- **상태 머신**: VIA1 ST0/ST1 라인 기반 Idle→Command→Talk/Listen 전환
+- **커맨드**: Talk, Listen, Flush, SendReset 파싱
+- **가상 디바이스**: 키보드(Address 2, Handler 2), 마우스(Address 3, Handler 1)
+- **입력 API**: `enqueueKey()`, `setMouseState()` + SRQ 지원
+- **테스트**: `tests/core/adb_test.zig` (8 tests)
+
+#### 3. 시스템 통합 ✅
+- **mac_lc.zig**: 24-bit SCSI MMIO (0x580000-0x5FFFFF) 추가
+- **root.zig**: `Scsi5380`, `Adb` public exports 추가
+- **build.zig**: 테스트 타겟 추가
+
+### 성과 지표
+| 항목 | 값 |
+|------|-----|
+| 코드 변경 | scsi.zig: 56→290줄, adb.zig: 31→410줄 |
+| 신규 테스트 | 15개 (SCSI 7, ADB 8) |
+| 전체 테스트 통과 | **133/133** ✅ |
