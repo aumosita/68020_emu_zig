@@ -368,7 +368,7 @@ export fn via_step(via: *via6522.Via6522, cycles: u32) void {
 }
 
 export fn via_get_irq(via: *via6522.Via6522) bool {
-    return via.irq_pin;
+    return via.getInterruptOutput();
 }
 
 // Mac LC System C API
@@ -392,18 +392,16 @@ pub export fn mac_lc_install(sys: *mac_lc.MacLcSystem, m68k: *cpu.M68k) void {
     m68k.memory.setMmio(mac_lc.MacLcSystem.mmioRead, mac_lc.MacLcSystem.mmioWrite, sys);
 }
 
-pub export fn mac_lc_sync(sys: *mac_lc.MacLcSystem, cycles: u32) void {
+pub export fn mac_lc_sync(sys: *MacLcSystem, cycles: u32) void {
     sys.sync(cycles);
 }
 
 pub export fn mac_lc_get_irq(sys: *mac_lc.MacLcSystem) bool {
-    return sys.via1.irq_pin or sys.rbv.getIrq();
+    return sys.via1.getInterruptOutput() or sys.rbv.getInterruptOutput();
 }
 
 pub export fn mac_lc_get_irq_level(sys: *mac_lc.MacLcSystem) u8 {
-    if (sys.rbv.getIrq()) return 2;
-    if (sys.via1.irq_pin) return 1;
-    return 0;
+    return sys.getIrqLevel();
 }
 
 test "basic library test" {

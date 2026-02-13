@@ -1,6 +1,6 @@
 const std = @import("std");
-const cpu = @import("cpu.zig");
-const memory = @import("memory.zig");
+const cpu = @import("../../src/core/cpu.zig");
+const memory = @import("../../src/core/memory.zig");
 
 test "I-Cache 2-way associativity" {
     const allocator = std.testing.allocator;

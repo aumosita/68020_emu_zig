@@ -13,9 +13,10 @@ System 6.0.8 구동을 위한 단계별 할 일 목록입니다.
 - [x] **SCSI (NCR 5380)**: 컨트롤러 레지스터 기초 설계 (완료)
 - [x] **ADB (Apple Desktop Bus)**: 키보드/마우스 통신 인터페이스 통합 (완료)
 
-### 2단계: 시스템 고도화 및 정밀도 증진 (신규 로드맵)
-- [ ] **CPU: 버스 사이클 정확도 (Bus-Cycle Accuracy)**: 파이프라인(Fetch/Decode/Execute) 모델링 및 Wait States 반영
-- [ ] **중앙 이벤트 스케줄러 (Event Scheduler)**: 장치 간 타이밍 동기화를 위한 이벤트 큐 아키텍처 도입
+### 2단계: 시스템 고도화 및 정밀도 증진 (진행 중)
+- [/] **CPU: 버스 사이클 정확도 (Bus-Cycle Accuracy)**: 파이프라인(Fetch/Decode/Execute) 모델링 및 Wait States 반영 (기초 구현)
+- [/] **중앙 이벤트 스케줄러 (Event Scheduler)**: 장치 간 타이밍 동기화를 위한 이벤트 큐 아키텍처 도입 (MacLcSystem.sync 도입)
+- [x] **하드웨어 인터럽트 통합 검증**: VIA/RBV 인터럽트 전파 및 CPU 예외 처리 (완료 - tests/integration/interrupts.zig)
 - [ ] **주변 장치 프로토콜 정밀화**: SCSI Phase 전환 로직 및 ADB 비트 타이밍 구현
 - [ ] **사운드 및 비디오 타이밍 정밀화**: Apple Sound Chip 샘플링 동기화 및 HBL 타이밍 반영
 

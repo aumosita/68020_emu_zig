@@ -6,11 +6,11 @@ pub const Rbv = struct {
     // Interrupt Registers (RBV style)
     ifr: u8 = 0, // Status/Flags
     ier: u8 = 0, // Enable/Mask
-    
+
     // Video configuration (simplified)
     depth: u8 = 0,
     mon_type: u8 = 6, // 12" RGB
-    
+
     // Interrupt source bits for RBV
     pub const BIT_SCSI: u8 = 0x01;
     pub const BIT_SLOT_E: u8 = 0x02;
@@ -56,6 +56,10 @@ pub const Rbv = struct {
             },
             else => {},
         }
+    }
+
+    pub fn getInterruptOutput(self: *const Rbv) bool {
+        return (self.ifr & self.ier & 0x7F) != 0;
     }
 
     pub fn setInterrupt(self: *Rbv, bit: u8) void {

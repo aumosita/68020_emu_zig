@@ -1,6 +1,6 @@
 const std = @import("std");
-const Memory = @import("memory.zig").Memory;
-const bus_cycle = @import("bus_cycle.zig");
+const Memory = @import("../../src/core/memory.zig").Memory;
+const bus_cycle = @import("../../src/core/bus_cycle.zig");
 
 test "memory with bus cycle modeling - ROM wait states" {
     const allocator = std.testing.allocator;

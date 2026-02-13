@@ -14,11 +14,11 @@ pub const MacLcSystem = struct {
     video: video.Video,
     scsi: scsi.Scsi5380,
     adb: adb.Adb,
-    
+
     // Memory and ROM
     rom_data: []u8,
     ram_size: u32,
-    
+
     // Address mode: true = 32-bit, false = 24-bit
     address_mode_32: bool = false,
 
@@ -62,13 +62,13 @@ pub const MacLcSystem = struct {
     pub fn busHook(ctx: ?*anyopaque, logical_addr: u32, access: memory.BusAccess) memory.BusSignal {
         const self: *MacLcSystem = @ptrCast(@alignCast(ctx orelse return .bus_error));
         _ = access;
-        
+
         // Handle 24-bit address wrapping if in 24-bit mode
         const addr = if (self.address_mode_32) logical_addr else (logical_addr & 0x00FFFFFF);
 
         // Very basic routing logic for now
         if (self.address_mode_32) {
-            if (addr >= 0x50000000 and addr <= 0x5FFFFFFF) return .ok; 
+            if (addr >= 0x50000000 and addr <= 0x5FFFFFFF) return .ok;
         } else {
             // 24-bit mode I/O regions
             if (addr >= 0x900000 and addr <= 0x9FFFFF) return .ok; // VIA1
@@ -139,14 +139,28 @@ pub const MacLcSystem = struct {
                 const offset = addr - 0x50F40000;
                 switch (size) {
                     1 => self.video.vram[offset] = @truncate(value),
-                    2 => { self.video.vram[offset] = @truncate(value >> 8); self.video.vram[offset + 1] = @truncate(value & 0xFF); },
-                    4 => { self.video.vram[offset] = @truncate(value >> 24); self.video.vram[offset + 1] = @truncate(value >> 16); self.video.vram[offset + 2] = @truncate(value >> 8); self.video.vram[offset + 3] = @truncate(value & 0xFF); },
+                    2 => {
+                        self.video.vram[offset] = @truncate(value >> 8);
+                        self.video.vram[offset + 1] = @truncate(value & 0xFF);
+                    },
+                    4 => {
+                        self.video.vram[offset] = @truncate(value >> 24);
+                        self.video.vram[offset + 1] = @truncate(value >> 16);
+                        self.video.vram[offset + 2] = @truncate(value >> 8);
+                        self.video.vram[offset + 3] = @truncate(value & 0xFF);
+                    },
                     else => return false,
                 }
                 return true;
             }
-            if (addr >= 0x50010000 and addr <= 0x50011FFF) { self.scsi.write(@truncate((addr >> 4) & 0x7), @truncate(value)); return true; }
-            if (addr >= 0x50024000 and addr <= 0x50024FFF) { self.video.writeVdac(addr, @truncate(value)); return true; }
+            if (addr >= 0x50010000 and addr <= 0x50011FFF) {
+                self.scsi.write(@truncate((addr >> 4) & 0x7), @truncate(value));
+                return true;
+            }
+            if (addr >= 0x50024000 and addr <= 0x50024FFF) {
+                self.video.writeVdac(addr, @truncate(value));
+                return true;
+            }
             if (addr >= 0x50000000 and addr <= 0x50001FFF) {
                 const reg: u4 = @truncate((addr >> 9) & 0xF);
                 self.via1.write(reg, @truncate(value));
@@ -154,7 +168,10 @@ pub const MacLcSystem = struct {
                 if (reg == 0x01 or reg == 0x00) self.updateAdb();
                 return true;
             }
-            if (addr >= 0x50026000 and addr <= 0x50027FFF) { self.rbv.write(@truncate((addr >> 9) & 0xF), @truncate(value)); return true; }
+            if (addr >= 0x50026000 and addr <= 0x50027FFF) {
+                self.rbv.write(@truncate((addr >> 9) & 0xF), @truncate(value));
+                return true;
+            }
         } else {
             if (addr >= 0x900000 and addr <= 0x9FFFFF) {
                 const reg: u4 = @truncate((addr >> 9) & 0xF);
@@ -163,7 +180,10 @@ pub const MacLcSystem = struct {
                 if (reg == 0x01 or reg == 0x00) self.updateAdb();
                 return true;
             }
-            if (addr >= 0xD00000 and addr <= 0xDFFFFF) { self.rbv.write(@truncate((addr >> 9) & 0xF), @truncate(value)); return true; }
+            if (addr >= 0xD00000 and addr <= 0xDFFFFF) {
+                self.rbv.write(@truncate((addr >> 9) & 0xF), @truncate(value));
+                return true;
+            }
         }
         return false;
     }
@@ -193,10 +213,29 @@ pub const MacLcSystem = struct {
 
     pub fn sync(self: *MacLcSystem, cycles: u32) void {
         self.via1.step(cycles);
+        // self.rbv.step(cycles); // RBV might not have step() yet
+
+        // VBL Logic
         self.cycles_since_vbl += cycles;
         if (self.cycles_since_vbl >= CYCLES_PER_VBL) {
             self.cycles_since_vbl -= CYCLES_PER_VBL;
+            // Trigger VBL in RBV (and VIA1?)
             self.rbv.setInterrupt(rbv.Rbv.BIT_VBL);
+            // Mac LC might also use VIA1 CA1/CA2 for VBL, typically 60Hz tick
+            self.via1.setInterrupt(via6522.Via6522.INT_CA1);
         }
+
+        // Update Interrupts... (rest is fine)
+    }
+
+    pub fn getIrqLevel(self: *MacLcSystem) u8 {
+        var level: u8 = 0;
+        if (self.via1.getInterruptOutput()) {
+            level = 1;
+        }
+        if (self.rbv.getInterruptOutput()) {
+            if (level < 2) level = 2;
+        }
+        return level;
     }
 };

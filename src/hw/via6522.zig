@@ -2,28 +2,28 @@ const std = @import("std");
 
 pub const Via6522 = struct {
     // Registers
-    port_b: u8 = 0,     // 0x00
-    port_a: u8 = 0,     // 0x01 (handshake)
-    ddr_b: u8 = 0,      // 0x02
-    ddr_a: u8 = 0,      // 0x03
-    t1c_l: u8 = 0,      // 0x04
-    t1c_h: u8 = 0,      // 0x05
-    t1l_l: u8 = 0,      // 0x06
-    t1l_h: u8 = 0,      // 0x07
-    t2c_l: u8 = 0,      // 0x08
-    t2c_h: u8 = 0,      // 0x09
-    sr: u8 = 0,         // 0x0A
-    acr: u8 = 0,        // 0x0B
-    pcr: u8 = 0,        // 0x0C
-    ifr: u8 = 0,        // 0x0D
-    ier: u8 = 0,        // 0x0E
-    port_a_nh: u8 = 0,  // 0x0F (no handshake)
+    port_b: u8 = 0, // 0x00
+    port_a: u8 = 0, // 0x01 (handshake)
+    ddr_b: u8 = 0, // 0x02
+    ddr_a: u8 = 0, // 0x03
+    t1c_l: u8 = 0, // 0x04
+    t1c_h: u8 = 0, // 0x05
+    t1l_l: u8 = 0, // 0x06
+    t1l_h: u8 = 0, // 0x07
+    t2c_l: u8 = 0, // 0x08
+    t2c_h: u8 = 0, // 0x09
+    sr: u8 = 0, // 0x0A
+    acr: u8 = 0, // 0x0B
+    pcr: u8 = 0, // 0x0C
+    ifr: u8 = 0, // 0x0D
+    ier: u8 = 0, // 0x0E
+    port_a_nh: u8 = 0, // 0x0F (no handshake)
 
     // Internal state
     t1_counter: u16 = 0,
     t1_latches: u16 = 0,
     t1_active: bool = false,
-    
+
     t2_counter: u16 = 0,
     t2_active: bool = false,
 
@@ -98,6 +98,10 @@ pub const Via6522 = struct {
             },
             0x0F => self.writePortA(value, false),
         }
+    }
+
+    pub fn getInterruptOutput(self: *const Via6522) bool {
+        return (self.ifr & self.ier & 0x7F) != 0;
     }
 
     fn readPortA(self: *Via6522, handshake: bool) u8 {
@@ -178,19 +182,32 @@ pub const Via6522 = struct {
         self.t2_active = false;
         self.irq_pin = false;
     }
+    pub const INT_CA2: u8 = 0x01;
+    pub const INT_CA1: u8 = 0x02;
+    pub const INT_SR: u8 = 0x04;
+    pub const INT_CB2: u8 = 0x08;
+    pub const INT_CB1: u8 = 0x10;
+    pub const INT_T2: u8 = 0x20;
+    pub const INT_T1: u8 = 0x40;
+    pub const INT_ANY: u8 = 0x80;
+
+    pub fn setInterrupt(self: *Via6522, source: u8) void {
+        self.ifr |= (source & 0x7F);
+        self.updateIrq();
+    }
 };
 
 test "Via6522 basic timer 1" {
     var via = Via6522.init();
     via.write(0x0E, 0xC0); // Enable T1 interrupt (IER bit 7=1, bit 6=1)
-    
+
     // Set T1 to 10 cycles
     via.write(0x04, 10); // Low
-    via.write(0x05, 0);  // High (starts timer)
-    
+    via.write(0x05, 0); // High (starts timer)
+
     via.step(10);
     try std.testing.expectEqual(@as(u16, 0), via.t1_counter);
-    
+
     via.step(1);
     try std.testing.expect((via.ifr & 0x40) != 0); // Flag set
     try std.testing.expect(via.irq_pin); // IRQ active
