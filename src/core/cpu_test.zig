@@ -26,6 +26,7 @@ const BusHookTestContext = struct {
     saw_program_fetch: bool = false,
     last_addr: u32 = 0,
     last_access: memory.BusAccess = .{},
+    error_target_addr: ?u32 = null, // Only trigger bus_error for this specific address
 };
 
 const BkptTestContext = struct {
@@ -73,7 +74,8 @@ fn busHookTestHandler(ctx: ?*anyopaque, logical_addr: u32, access: memory.BusAcc
             break :blk .ok;
         },
         .halt_program_fetch => if (access.space == .Program and !access.is_write) .halt else .ok,
-        .bus_error_on_data_write => if (access.space == .Data and access.is_write) .bus_error else .ok,
+        .bus_error_on_data_write => if (access.space == .Data and access.is_write and
+            (typed.error_target_addr == null or typed.error_target_addr.? == logical_addr)) .bus_error else .ok,
         .capture_program_fetch => .ok,
     };
 }
@@ -2243,7 +2245,7 @@ test "M68k bus hook data-write error enters vector 2 with DFC in format A access
     var m68k = M68k.init(allocator);
     defer m68k.deinit();
 
-    var ctx = BusHookTestContext{ .mode = .bus_error_on_data_write };
+    var ctx = BusHookTestContext{ .mode = .bus_error_on_data_write, .error_target_addr = 0x2400 };
     m68k.memory.setBusHook(busHookTestHandler, &ctx);
 
     try m68k.memory.write32(m68k.getExceptionVector(2), 0x9400);
@@ -2278,7 +2280,9 @@ test "M68k data access translator remaps execute write while preserving logical 
     m68k.memory.setBusHook(busHookTestHandler, &ctx);
     m68k.memory.setAddressTranslator(dataAccessAddTranslator, null);
 
-    try m68k.memory.write16(0x8D00, 0x3080); // MOVE.W D0,(A0)
+    // Write instruction directly to data[] to bypass address translator
+    // (instruction setup is not a data-space access)
+    std.mem.writeInt(u16, m68k.memory.data[0x8D00..0x8D02], 0x3080, .big); // MOVE.W D0,(A0)
     m68k.pc = 0x8D00;
     m68k.a[0] = 0x0300; // logical data address, translated to 0x1300
     m68k.d[0] = 0x00001234;
@@ -2287,8 +2291,13 @@ test "M68k data access translator remaps execute write while preserving logical 
 
     // MOVE.W D0,(A0): 4 (base) + 0 (src reg) + 4 (dst indirect) = 8
     try std.testing.expectEqual(@as(u32, 8), try m68k.step());
-    try std.testing.expectEqual(@as(u16, 0x1234), try m68k.memory.read16(0x1300)); // translated target
-    try std.testing.expectEqual(@as(u16, 0x0000), try m68k.memory.read16(0x0300)); // logical location unchanged
+    // Verify physical memory directly (bypassing address translator)
+    const b0: u16 = m68k.memory.data[0x1300];
+    const b1: u16 = m68k.memory.data[0x1301];
+    try std.testing.expectEqual(@as(u16, 0x1234), (b0 << 8) | b1); // translated target
+    const c0: u16 = m68k.memory.data[0x0300];
+    const c1: u16 = m68k.memory.data[0x0301];
+    try std.testing.expectEqual(@as(u16, 0x0000), (c0 << 8) | c1); // logical location unchanged
     try std.testing.expect(ctx.saw_data_write);
     try std.testing.expectEqual(@as(u32, 0x0300), ctx.last_addr); // hook sees logical address
     try std.testing.expectEqual(@as(u3, 0b011), ctx.last_access.function_code);

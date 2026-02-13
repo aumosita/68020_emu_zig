@@ -2,6 +2,9 @@ const std = @import("std");
 const testing = std.testing;
 const root = @import("m68020");
 
+// Bus access for test setup writes through MMIO
+const sd: root.BusAccess = .{ .function_code = 0b101, .space = .Data, .is_write = true };
+
 test "VIA Timer 1 Interrupt to CPU Integration" {
     const allocator = std.testing.allocator;
 
@@ -17,8 +20,8 @@ test "VIA Timer 1 Interrupt to CPU Integration" {
     // 2. Setup CPU for Interrupts
     // Initialize Vector Table (Autovector Level 1 = Vector 25 = 0x19)
     // Vector 25 address is at 0x64.
-    try m68k.memory.write32(0x64, 0x2000); // ISR Handler Address
-    try m68k.memory.write16(0x2000, 0x4E73); // RTE
+    try m68k.memory.write32Bus(0x64, 0x2000, sd); // ISR Handler Address
+    try m68k.memory.write16Bus(0x2000, 0x4E73, sd); // RTE
 
     // Set SR to 0x2000 (Supervisor, IPL=0) to allow Level 1 interrupt
     m68k.setSR(0x2000);
@@ -83,22 +86,22 @@ test "Nested Interrupts (RBV preempting VIA)" {
 
     // Setup Vectors
     // Level 1 Autovector (VIA) -> 0x64 -> 0x2000
-    try m68k.memory.write32(0x64, 0x2000);
+    try m68k.memory.write32Bus(0x64, 0x2000, sd);
     // Level 2 Autovector (RBV) -> 0x68 -> 0x3000
-    try m68k.memory.write32(0x68, 0x3000);
+    try m68k.memory.write32Bus(0x68, 0x3000, sd);
 
     // ISR 1 Code at 0x2000:
     // NOP
     // (Wait for nested interrupt logic)
     // RTE
-    try m68k.memory.write16(0x2000, 0x4E71); // NOP
-    try m68k.memory.write16(0x2002, 0x4E73); // RTE
+    try m68k.memory.write16Bus(0x2000, 0x4E71, sd); // NOP
+    try m68k.memory.write16Bus(0x2002, 0x4E73, sd); // RTE
 
     // ISR 2 Code at 0x3000:
     // MOVEQ #42, D7
     // RTE
-    try m68k.memory.write16(0x3000, 0x7E2A); // MOVEQ #42, D7
-    try m68k.memory.write16(0x3002, 0x4E73); // RTE
+    try m68k.memory.write16Bus(0x3000, 0x7E2A, sd); // MOVEQ #42, D7
+    try m68k.memory.write16Bus(0x3002, 0x4E73, sd); // RTE
 
     // Initial State
     m68k.setSR(0x2000); // IPL 0
@@ -176,7 +179,8 @@ test "Nested Interrupts (RBV preempting VIA)" {
     try std.testing.expectEqual(@as(u3, 2), @as(u3, @truncate((m68k.sr >> 8) & 7)));
 
     // Verify ISR 2 code
-    try std.testing.expectEqual(@as(u16, 0x7E2A), try m68k.memory.read16(0x3000));
+    const sd_read: root.BusAccess = .{ .function_code = 0b101, .space = .Data, .is_write = false };
+    try std.testing.expectEqual(@as(u16, 0x7E2A), try m68k.memory.read16Bus(0x3000, sd_read));
 
     // Execute ISR 2 (MOVEQ, RTE) and return to L1
     // Step 1: MOVEQ

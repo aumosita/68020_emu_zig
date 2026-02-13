@@ -17,6 +17,7 @@ const scheduler = @import("core/scheduler.zig");
 pub const M68k = cpu.M68k;
 pub const Decoder = decoder.Decoder;
 pub const Memory = memory.Memory;
+pub const BusAccess = memory.BusAccess;
 pub const Via6522 = via6522.Via6522;
 pub const Rtc = rtc.Rtc;
 pub const Rbv = rbv.Rbv;

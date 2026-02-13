@@ -4,6 +4,14 @@ const decoder = @import("decoder.zig");
 const memory = @import("memory.zig");
 const ea_cycles = @import("ea_cycles.zig");
 
+// Bus access helpers for stack/supervisor operations that must go through MMIO
+fn supervisorData() memory.BusAccess {
+    return .{ .function_code = 0b101, .space = .Data, .is_write = false };
+}
+fn supervisorWrite() memory.BusAccess {
+    return .{ .function_code = 0b101, .space = .Data, .is_write = true };
+}
+
 pub const Executor = struct {
     pub fn init() Executor {
         return .{};
@@ -635,14 +643,14 @@ fn executeLea(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     return 2 + getEACycles(i.src, .Long, true);
 }
 fn executeRts(m: *cpu.M68k) !u32 {
-    m.pc = try m.memory.read32(m.a[7]);
+    m.pc = try m.memory.read32Bus(m.a[7], supervisorData());
     m.a[7] += 4;
     return 16;
 }
 fn executeRtr(m: *cpu.M68k) !u32 {
-    const ccr = try m.memory.read16(m.a[7]);
+    const ccr = try m.memory.read16Bus(m.a[7], supervisorData());
     m.sr = (m.sr & 0xFF00) | (ccr & 0xFF);
-    m.pc = try m.memory.read32(m.a[7] + 2);
+    m.pc = try m.memory.read32Bus(m.a[7] + 2, supervisorData());
     m.a[7] += 6;
     return 20;
 }
@@ -652,9 +660,10 @@ fn executeRte(m: *cpu.M68k) !u32 {
         return 34;
     }
     const sp = m.a[7];
-    const sr = try m.memory.read16(sp);
-    const pc = try m.memory.read32(sp + 2);
-    const format_vector = try m.memory.read16(sp + 6);
+    const sd = supervisorData();
+    const sr = try m.memory.read16Bus(sp, sd);
+    const pc = try m.memory.read32Bus(sp + 2, sd);
+    const format_vector = try m.memory.read16Bus(sp + 6, sd);
     const format = @as(u4, @truncate(format_vector >> 12));
 
     // 68020 스택 프레임 처리
@@ -783,13 +792,13 @@ fn executeBcc(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
 }
 fn executeBsr(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     m.a[7] -= 4;
-    try m.memory.write32(m.a[7], m.pc + i.size);
+    try m.memory.write32Bus(m.a[7], m.pc + i.size, supervisorWrite());
     return try executeBra(m, i);
 }
 fn executeJsr(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const t = try calculateEA(m, i.dst);
     m.a[7] -= 4;
-    try m.memory.write32(m.a[7], m.pc + i.size);
+    try m.memory.write32Bus(m.a[7], m.pc + i.size, supervisorWrite());
     m.pc = t;
     return 16;
 }
@@ -992,7 +1001,7 @@ fn executeLink(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
         else => 0,
     });
     m.a[7] -= 4;
-    try m.memory.write32(m.a[7], m.a[r]);
+    try m.memory.write32Bus(m.a[7], m.a[r], supervisorWrite());
     m.a[r] = m.a[7];
     m.a[7] = @bitCast(@as(i32, @bitCast(m.a[7])) + @as(i32, d));
     m.pc += 4;
@@ -1004,7 +1013,7 @@ fn executeUnlk(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
         else => 7,
     };
     m.a[7] = m.a[r];
-    m.a[r] = try m.memory.read32(m.a[7]);
+    m.a[r] = try m.memory.read32Bus(m.a[7], supervisorData());
     m.a[7] += 4;
     m.pc += i.size;
     return 12;
@@ -1012,7 +1021,7 @@ fn executeUnlk(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
 fn executePea(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const a = try calculateEA(m, i.src);
     m.a[7] -= 4;
-    try m.memory.write32(m.a[7], a);
+    try m.memory.write32Bus(m.a[7], a, supervisorWrite());
     m.pc += i.size;
     return 12;
 }
@@ -1037,9 +1046,9 @@ fn executeMovem(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
                     const reg_val: u32 = if (idx < 8) m.d[idx] else m.a[idx - 8];
                     addr -= size_bytes;
                     if (i.data_size == .Word) {
-                        try m.memory.write16(addr, @truncate(reg_val));
+                        try m.memory.write16Bus(addr, @truncate(reg_val), supervisorWrite());
                     } else {
-                        try m.memory.write32(addr, reg_val);
+                        try m.memory.write32Bus(addr, reg_val, supervisorWrite());
                     }
                 }
                 m.a[areg] = addr;
@@ -1055,9 +1064,9 @@ fn executeMovem(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
                     if ((mask & (@as(u16, 1) << shift)) == 0) continue;
                     const reg_val: u32 = if (idx < 8) m.d[idx] else m.a[idx - 8];
                     if (i.data_size == .Word) {
-                        try m.memory.write16(addr, @truncate(reg_val));
+                        try m.memory.write16Bus(addr, @truncate(reg_val), supervisorWrite());
                     } else {
-                        try m.memory.write32(addr, reg_val);
+                        try m.memory.write32Bus(addr, reg_val, supervisorWrite());
                     }
                     addr += size_bytes;
                 }
@@ -1080,11 +1089,11 @@ fn executeMovem(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
             const shift: u4 = @truncate(idx);
             if ((mask & (@as(u16, 1) << shift)) == 0) continue;
             if (i.data_size == .Word) {
-                const w = try m.memory.read16(addr);
+                const w = try m.memory.read16Bus(addr, supervisorData());
                 const value = @as(u32, @bitCast(@as(i32, @as(i16, @bitCast(w)))));
                 if (idx < 8) m.d[idx] = value else m.a[idx - 8] = value;
             } else {
-                const l = try m.memory.read32(addr);
+                const l = try m.memory.read32Bus(addr, supervisorData());
                 if (idx < 8) m.d[idx] = l else m.a[idx - 8] = l;
             }
             addr += size_bytes;
@@ -1207,14 +1216,16 @@ fn executeMovep(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
         };
         const a = try calculateEA(m, i.src);
         if (i.data_size == .Word) {
-            const hi = @as(u32, try m.memory.read8(a)) << 8;
-            const lo = @as(u32, try m.memory.read8(a + 2));
+            const sd = supervisorData();
+            const hi = @as(u32, try m.memory.read8Bus(a, sd)) << 8;
+            const lo = @as(u32, try m.memory.read8Bus(a + 2, sd));
             m.d[r] = (m.d[r] & 0xFFFF0000) | hi | lo;
         } else {
-            const b0 = @as(u32, try m.memory.read8(a)) << 24;
-            const b1 = @as(u32, try m.memory.read8(a + 2)) << 16;
-            const b2 = @as(u32, try m.memory.read8(a + 4)) << 8;
-            const b3 = @as(u32, try m.memory.read8(a + 6));
+            const sd = supervisorData();
+            const b0 = @as(u32, try m.memory.read8Bus(a, sd)) << 24;
+            const b1 = @as(u32, try m.memory.read8Bus(a + 2, sd)) << 16;
+            const b2 = @as(u32, try m.memory.read8Bus(a + 4, sd)) << 8;
+            const b3 = @as(u32, try m.memory.read8Bus(a + 6, sd));
             m.d[r] = b0 | b1 | b2 | b3;
         }
     } else {
@@ -1224,14 +1235,15 @@ fn executeMovep(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
         };
         const a = try calculateEA(m, i.dst);
         const v = m.d[r];
+        const sw = supervisorWrite();
         if (i.data_size == .Word) {
-            try m.memory.write8(a, @truncate(v >> 8));
-            try m.memory.write8(a + 2, @truncate(v & 0xFF));
+            try m.memory.write8Bus(a, @truncate(v >> 8), sw);
+            try m.memory.write8Bus(a + 2, @truncate(v & 0xFF), sw);
         } else {
-            try m.memory.write8(a, @truncate(v >> 24));
-            try m.memory.write8(a + 2, @truncate(v >> 16));
-            try m.memory.write8(a + 4, @truncate(v >> 8));
-            try m.memory.write8(a + 6, @truncate(v & 0xFF));
+            try m.memory.write8Bus(a, @truncate(v >> 24), sw);
+            try m.memory.write8Bus(a + 2, @truncate(v >> 16), sw);
+            try m.memory.write8Bus(a + 4, @truncate(v >> 8), sw);
+            try m.memory.write8Bus(a + 6, @truncate(v & 0xFF), sw);
         }
     }
     m.pc += 4;
@@ -1451,19 +1463,21 @@ fn executeCas2(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const du1 = @as(u3, @truncate((ext1 >> 8) & 7));
     const dc2 = @as(u3, @truncate(ext2 & 7));
     const du2 = @as(u3, @truncate((ext2 >> 8) & 7));
-    const m1 = if (i.data_size == .Word) @as(u32, try m.memory.read16(a1)) else try m.memory.read32(a1);
-    const m2 = if (i.data_size == .Word) @as(u32, try m.memory.read16(a2)) else try m.memory.read32(a2);
+    const sd = supervisorData();
+    const m1 = if (i.data_size == .Word) @as(u32, try m.memory.read16Bus(a1, sd)) else try m.memory.read32Bus(a1, sd);
+    const m2 = if (i.data_size == .Word) @as(u32, try m.memory.read16Bus(a2, sd)) else try m.memory.read32Bus(a2, sd);
     const c1 = getRegisterValue(m.d[dc1], i.data_size);
     const c2 = getRegisterValue(m.d[dc2], i.data_size);
     if (m1 == c1 and m2 == c2) {
         const up1 = getRegisterValue(m.d[du1], i.data_size);
         const up2 = getRegisterValue(m.d[du2], i.data_size);
+        const sw = supervisorWrite();
         if (i.data_size == .Word) {
-            try m.memory.write16(a1, @truncate(up1));
-            try m.memory.write16(a2, @truncate(up2));
+            try m.memory.write16Bus(a1, @truncate(up1), sw);
+            try m.memory.write16Bus(a2, @truncate(up2), sw);
         } else {
-            try m.memory.write32(a1, up1);
-            try m.memory.write32(a2, up2);
+            try m.memory.write32Bus(a1, up1, sw);
+            try m.memory.write32Bus(a2, up2, sw);
         }
         m.setFlag(cpu.M68k.FLAG_Z, true);
     } else {
@@ -1483,19 +1497,21 @@ fn executeCallm(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
         else => return error.InvalidOperand,
     };
     const descriptor_addr = try calculateEA(m, i.dst);
-    const entry_ptr = try m.memory.read32(descriptor_addr + 4);
-    const module_data_ptr = try m.memory.read32(descriptor_addr + 8);
-    const entry_word = try m.memory.read16(entry_ptr);
+    const sd = supervisorData();
+    const entry_ptr = try m.memory.read32Bus(descriptor_addr + 4, sd);
+    const module_data_ptr = try m.memory.read32Bus(descriptor_addr + 8, sd);
+    const entry_word = try m.memory.read16Bus(entry_ptr, sd);
     const reg_spec: u4 = @truncate((entry_word >> 12) & 0xF);
     const is_addr_reg = (reg_spec & 0x8) != 0;
     const reg: u3 = @truncate(reg_spec & 0x7);
     const saved_reg_value = if (is_addr_reg) m.a[reg] else m.d[reg];
 
+    const sw = supervisorWrite();
     m.a[7] -= 12;
-    try m.memory.write16(m.a[7], m.sr & 0x00FF);
-    try m.memory.write32(m.a[7] + 2, m.pc + i.size);
-    try m.memory.write32(m.a[7] + 6, saved_reg_value);
-    try m.memory.write16(m.a[7] + 10, arg_count);
+    try m.memory.write16Bus(m.a[7], m.sr & 0x00FF, sw);
+    try m.memory.write32Bus(m.a[7] + 2, m.pc + i.size, sw);
+    try m.memory.write32Bus(m.a[7] + 6, saved_reg_value, sw);
+    try m.memory.write16Bus(m.a[7] + 10, arg_count, sw);
 
     // A7 is the active module frame stack; keep it stable.
     if (!(is_addr_reg and reg == 7)) {
@@ -1517,10 +1533,11 @@ fn executeRtm(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     };
 
     const sp = m.a[7];
-    const saved_ccr = try m.memory.read16(sp);
-    const return_pc = try m.memory.read32(sp + 2);
-    const saved_reg_value = try m.memory.read32(sp + 6);
-    const arg_count = try m.memory.read16(sp + 10);
+    const sd = supervisorData();
+    const saved_ccr = try m.memory.read16Bus(sp, sd);
+    const return_pc = try m.memory.read32Bus(sp + 2, sd);
+    const saved_reg_value = try m.memory.read32Bus(sp + 6, sd);
+    const arg_count = try m.memory.read16Bus(sp + 10, sd);
 
     m.sr = (m.sr & 0xFF00) | (saved_ccr & 0x00FF);
     if (restore_addr_reg) {
@@ -1537,12 +1554,12 @@ fn executeRtd(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
         .Immediate16 => |v| v,
         else => 0,
     });
-    m.pc = try m.memory.read32(m.a[7]);
+    m.pc = try m.memory.read32Bus(m.a[7], supervisorData());
     m.a[7] = @bitCast(@as(i32, @bitCast(m.a[7])) + 4 + @as(i32, disp));
     return 10;
 }
 fn executeBkpt(m: *cpu.M68k, _: *const decoder.Instruction) !u32 {
-    const opcode = try m.memory.read16(m.pc);
+    const opcode = try m.memory.read16Bus(m.pc, supervisorData());
     const vector: u3 = @truncate(opcode & 0x7);
     if (m.bkpt_handler) |handler| {
         const pc_before = m.pc;
@@ -1574,9 +1591,10 @@ fn executeChk2(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const cmp_val = if (is_addr) m.a[reg] else m.d[reg];
     const size_bytes = getSizeBytes(i.data_size);
     const ea = try calculateEA(m, i.src);
-    const lower = if (i.data_size == .Byte) @as(u32, try m.memory.read8(ea)) else if (i.data_size == .Word) @as(u32, try m.memory.read16(ea)) else try m.memory.read32(ea);
+    const sd = supervisorData();
+    const lower = if (i.data_size == .Byte) @as(u32, try m.memory.read8Bus(ea, sd)) else if (i.data_size == .Word) @as(u32, try m.memory.read16Bus(ea, sd)) else try m.memory.read32Bus(ea, sd);
     const upper_addr = ea + size_bytes;
-    const upper = if (i.data_size == .Byte) @as(u32, try m.memory.read8(upper_addr)) else if (i.data_size == .Word) @as(u32, try m.memory.read16(upper_addr)) else try m.memory.read32(upper_addr);
+    const upper = if (i.data_size == .Byte) @as(u32, try m.memory.read8Bus(upper_addr, sd)) else if (i.data_size == .Word) @as(u32, try m.memory.read16Bus(upper_addr, sd)) else try m.memory.read32Bus(upper_addr, sd);
     const in_range = isWithinBounds(cmp_val, lower, upper, i.data_size);
 
     m.setFlag(cpu.M68k.FLAG_Z, in_range);
@@ -1598,9 +1616,10 @@ fn executeCmp2(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const cmp_val = if (is_addr) m.a[reg] else m.d[reg];
     const size_bytes = getSizeBytes(i.data_size);
     const ea = try calculateEA(m, i.src);
-    const lower = if (i.data_size == .Byte) @as(u32, try m.memory.read8(ea)) else if (i.data_size == .Word) @as(u32, try m.memory.read16(ea)) else try m.memory.read32(ea);
+    const sd = supervisorData();
+    const lower = if (i.data_size == .Byte) @as(u32, try m.memory.read8Bus(ea, sd)) else if (i.data_size == .Word) @as(u32, try m.memory.read16Bus(ea, sd)) else try m.memory.read32Bus(ea, sd);
     const upper_addr = ea + size_bytes;
-    const upper = if (i.data_size == .Byte) @as(u32, try m.memory.read8(upper_addr)) else if (i.data_size == .Word) @as(u32, try m.memory.read16(upper_addr)) else try m.memory.read32(upper_addr);
+    const upper = if (i.data_size == .Byte) @as(u32, try m.memory.read8Bus(upper_addr, sd)) else if (i.data_size == .Word) @as(u32, try m.memory.read16Bus(upper_addr, sd)) else try m.memory.read32Bus(upper_addr, sd);
     const in_range = isWithinBounds(cmp_val, lower, upper, i.data_size);
 
     m.setFlag(cpu.M68k.FLAG_Z, in_range);
@@ -1924,7 +1943,7 @@ fn resolveComplexEA(m: *cpu.M68k, ea: std.meta.FieldType(decoder.Operand, .Compl
     }
 
     m.noteDataAccess(ptr_addr, false);
-    var effective = try m.memory.read32(ptr_addr);
+    var effective = try m.memory.read32Bus(ptr_addr, supervisorData());
     if (ea.is_post_indexed) {
         if (ea.index_reg) |idx| {
             effective = addSigned(effective, indexValue(m, idx));

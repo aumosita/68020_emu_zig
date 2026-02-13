@@ -76,9 +76,10 @@ test "Memory Map: ROM overlay clears when ROM region accessed" {
     _ = MacLcSystem.mmioRead(system, 0x400000, 1);
     try testing.expect(!system.isOverlayActive());
 
-    // Now reading 0x000000 should return null (falls through to RAM)
+    // Now reading 0x000000 should return RAM data (0) — MMIO routes RAM through sys.ram[]
     const val = MacLcSystem.mmioRead(system, 0x000000, 1);
-    try testing.expect(val == null);
+    try testing.expect(val != null);
+    try testing.expectEqual(@as(u32, 0), val.?);
 }
 
 test "Memory Map: ROM is read-only (24-bit write ignored)" {

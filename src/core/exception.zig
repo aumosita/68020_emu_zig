@@ -28,7 +28,24 @@ pub fn buildFormatAAccessWord(access: memory.BusAccess) u16 {
 }
 
 pub fn readFaultInstructionWord(self: *const cpu.M68k, return_pc: u32) u16 {
-    return self.memory.read16(return_pc) catch 0;
+    return self.memory.read16Bus(return_pc, supervisorData()) catch 0;
+}
+
+// Supervisor data function code for exception stack access
+fn supervisorData() memory.BusAccess {
+    return .{
+        .function_code = 0b101, // Supervisor data
+        .space = .Data,
+        .is_write = false,
+    };
+}
+
+fn supervisorWrite() memory.BusAccess {
+    return .{
+        .function_code = 0b101, // Supervisor data
+        .space = .Data,
+        .is_write = true,
+    };
 }
 
 pub fn enterFaultFrameA(self: *cpu.M68k, vector: u8, return_pc: u32, fault_addr: u32, access: memory.BusAccess, retry_count: u8) !void {
@@ -37,18 +54,20 @@ pub fn enterFaultFrameA(self: *cpu.M68k, vector: u8, return_pc: u32, fault_addr:
     sr_new &= ~registers.FLAG_M;
     registers.setSR(self, sr_new);
 
+    const write_access = supervisorWrite();
+
     self.a[7] -= 24;
-    try self.memory.write16(self.a[7], old_sr);
-    try self.memory.write32(self.a[7] + 2, return_pc);
-    try self.memory.write16(self.a[7] + 6, (@as(u16, 0xA) << 12) | (@as(u16, vector) * 4));
-    try self.memory.write32(self.a[7] + 8, fault_addr);
-    try self.memory.write16(self.a[7] + 12, buildFormatAAccessWord(access));
-    try self.memory.write16(self.a[7] + 14, readFaultInstructionWord(self, return_pc));
-    try self.memory.write16(self.a[7] + 16, retry_count);
-    try self.memory.write16(self.a[7] + 18, 0);
-    try self.memory.write16(self.a[7] + 20, 0);
-    try self.memory.write16(self.a[7] + 22, 0);
-    self.pc = self.memory.read32(getExceptionVector(self, vector)) catch 0;
+    try self.memory.write16Bus(self.a[7], old_sr, write_access);
+    try self.memory.write32Bus(self.a[7] + 2, return_pc, write_access);
+    try self.memory.write16Bus(self.a[7] + 6, (@as(u16, 0xA) << 12) | (@as(u16, vector) * 4), write_access);
+    try self.memory.write32Bus(self.a[7] + 8, fault_addr, write_access);
+    try self.memory.write16Bus(self.a[7] + 12, buildFormatAAccessWord(access), write_access);
+    try self.memory.write16Bus(self.a[7] + 14, readFaultInstructionWord(self, return_pc), write_access);
+    try self.memory.write16Bus(self.a[7] + 16, retry_count, write_access);
+    try self.memory.write16Bus(self.a[7] + 18, 0, write_access);
+    try self.memory.write16Bus(self.a[7] + 20, 0, write_access);
+    try self.memory.write16Bus(self.a[7] + 22, 0, write_access);
+    self.pc = self.memory.read32Bus(getExceptionVector(self, vector), supervisorData()) catch 0;
 }
 
 pub fn enterBusErrorFrameA(self: *cpu.M68k, return_pc: u32, fault_addr: u32, access: memory.BusAccess) !void {
@@ -60,10 +79,11 @@ pub fn enterAddressErrorFrameA(self: *cpu.M68k, return_pc: u32, fault_addr: u32,
 }
 
 pub fn pushExceptionFrame(self: *cpu.M68k, status_word: u16, return_pc: u32, vector: u8, format: u4) !void {
+    const write_access = supervisorWrite();
     self.a[7] -= 8;
-    try self.memory.write16(self.a[7], status_word);
-    try self.memory.write32(self.a[7] + 2, return_pc);
-    try self.memory.write16(self.a[7] + 6, (@as(u16, format) << 12) | (@as(u16, vector) * 4));
+    try self.memory.write16Bus(self.a[7], status_word, write_access);
+    try self.memory.write32Bus(self.a[7] + 2, return_pc, write_access);
+    try self.memory.write16Bus(self.a[7] + 6, (@as(u16, format) << 12) | (@as(u16, vector) * 4), write_access);
 }
 
 pub fn enterException(self: *cpu.M68k, vector: u8, return_pc: u32, format: u4, new_ipl: ?u3) !void {
@@ -75,5 +95,5 @@ pub fn enterException(self: *cpu.M68k, vector: u8, return_pc: u32, format: u4, n
     }
     registers.setSR(self, sr_new);
     try pushExceptionFrame(self, old_sr, return_pc, vector, format);
-    self.pc = try self.memory.read32(getExceptionVector(self, vector));
+    self.pc = self.memory.read32Bus(getExceptionVector(self, vector), supervisorData()) catch 0;
 }

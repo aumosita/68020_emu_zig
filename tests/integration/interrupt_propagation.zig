@@ -5,6 +5,10 @@ const MacLcSystem = root.MacLcSystem;
 const Scheduler = root.Scheduler;
 const Rbv = root.Rbv;
 
+// Bus access for writing test setup data through MMIO (required when Mac LC
+// MMIO routes RAM through sys.ram[] instead of memory.data[]).
+const sd: root.BusAccess = .{ .function_code = 0b101, .space = .Data, .is_write = true };
+
 test "Interrupt Propagation: Level 1 (VIA) -> RTE" {
     const allocator = testing.allocator;
     var system = try MacLcSystem.init(allocator, 1 * 1024 * 1024, null);
@@ -15,9 +19,9 @@ test "Interrupt Propagation: Level 1 (VIA) -> RTE" {
     root.mac_lc_install(system, &m68k);
 
     // Setup Vector 25 (Level 1 Autovector) -> 0x2000
-    try m68k.memory.write32(0x64, 0x2000);
+    try m68k.memory.write32Bus(0x64, 0x2000, sd);
     // ISR at 0x2000: RTE
-    try m68k.memory.write16(0x2000, 0x4E73);
+    try m68k.memory.write16Bus(0x2000, 0x4E73, sd);
 
     // Initial State: PC=0x1000, SR=0x2000 (Supervisor, IPL=0)
     m68k.pc = 0x1000;
@@ -44,13 +48,6 @@ test "Interrupt Propagation: Level 1 (VIA) -> RTE" {
     }
     try testing.expect(entered_isr);
 
-    // Check Stack content (Exception Stack Frame)
-    // Format word (0x0... + Vector offset 0x64) -> 0x0064? No, 68000 is different.
-    // 68020 Stack Frame Format 0:
-    // SP -> SR
-    // SP+2 -> PC
-    // SP+6 -> Vector Offset (Format 0 + Vector Offset)
-
     // Clear VIA Interrupt (Simulate ISR doing it)
     system.via1.ifr &= ~root.Via6522.INT_T1;
     m68k.setInterruptLevel(@intCast(system.getIrqLevel()));
@@ -63,10 +60,6 @@ test "Interrupt Propagation: Level 1 (VIA) -> RTE" {
     _ = try m68k.step();
 
     // Verify Return
-    // PC should be next instruction after where we were? 0x1000?
-    // If we interrupted before 0x1000 executed?
-    // Actually we just set PC=0x1000 and stepped.
-    // If it interrupted immediately, saved PC is 0x1000.
     try testing.expectEqual(@as(u32, 0x1000), m68k.pc);
 
     // IPL should be 0
@@ -84,16 +77,16 @@ test "Interrupt Propagation: Nested (L1 -> L2 -> L1 -> Main)" {
     root.mac_lc_install(system, &m68k);
 
     // Vector 25 (L1) -> 0x2000
-    try m68k.memory.write32(0x64, 0x2000);
+    try m68k.memory.write32Bus(0x64, 0x2000, sd);
     // ISR 1: NOP, NOP, RTE
-    try m68k.memory.write16(0x2000, 0x4E71);
-    try m68k.memory.write16(0x2002, 0x4E71);
-    try m68k.memory.write16(0x2004, 0x4E73);
+    try m68k.memory.write16Bus(0x2000, 0x4E71, sd);
+    try m68k.memory.write16Bus(0x2002, 0x4E71, sd);
+    try m68k.memory.write16Bus(0x2004, 0x4E73, sd);
 
     // Vector 26 (L2) Autovector -> 0x68 -> 0x3000
-    try m68k.memory.write32(0x68, 0x3000);
+    try m68k.memory.write32Bus(0x68, 0x3000, sd);
     // ISR 2: RTE
-    try m68k.memory.write16(0x3000, 0x4E73);
+    try m68k.memory.write16Bus(0x3000, 0x4E73, sd);
 
     // Initial State
     m68k.pc = 0x1000;
@@ -120,7 +113,6 @@ test "Interrupt Propagation: Nested (L1 -> L2 -> L1 -> Main)" {
     try testing.expectEqual(@as(u16, 1), (m68k.sr >> 8) & 7);
 
     // 2. Trigger L2 (RBV) inside L1 ISR
-    // We execute one NOP at 0x2000 -> PC 0x2002
     _ = try m68k.step();
     try testing.expectEqual(@as(u32, 0x2002), m68k.pc);
 
@@ -149,16 +141,13 @@ test "Interrupt Propagation: Nested (L1 -> L2 -> L1 -> Main)" {
     try testing.expectEqual(@as(u16, 2), (m68k.sr >> 8) & 7);
 
     // 3. Return from L2 (RTE)
-    // Should return to PC 0x2002 (L1 ISR)
-    // Should restore SR IPL to 1
-
     // Clear RBV Interrupt
     system.rbv.ifr &= ~root.Rbv.BIT_VBL;
     m68k.setInterruptLevel(@intCast(system.getIrqLevel()));
 
     _ = try m68k.step(); // RTE
 
-    try testing.expectEqual(@as(u32, 0x2002), m68k.pc); // FIXME: This failed in previous tests
+    try testing.expectEqual(@as(u32, 0x2002), m68k.pc);
     try testing.expectEqual(@as(u16, 1), (m68k.sr >> 8) & 7);
 
     // 4. Finish L2 ISR (NOP at 0x2002 -> 0x2004)
@@ -166,9 +155,6 @@ test "Interrupt Propagation: Nested (L1 -> L2 -> L1 -> Main)" {
     try testing.expectEqual(@as(u32, 0x2004), m68k.pc);
 
     // 5. Return from L1 (RTE at 0x2004)
-    // Should return to 0x1000
-    // Should restore SR IPL to 0
-
     // Clear VIA Interrupt
     system.via1.ifr &= ~root.Via6522.INT_T1;
     m68k.setInterruptLevel(@intCast(system.getIrqLevel()));
@@ -194,9 +180,9 @@ test "Interrupt Propagation: Priority Masking (L1 ignored at IPL 2)" {
     m68k.a[7] = 0x4000;
 
     // Vector 25 (L1) -> 0x2000
-    try m68k.memory.write32(0x64, 0x2000);
+    try m68k.memory.write32Bus(0x64, 0x2000, sd);
     // Code at 0x1000: NOP
-    try m68k.memory.write16(0x1000, 0x4E71);
+    try m68k.memory.write16Bus(0x1000, 0x4E71, sd);
 
     // Trigger L1 (VIA)
     system.via1.ier = 0x80 | root.Via6522.INT_T1;
@@ -221,9 +207,9 @@ test "Interrupt Propagation: Spurious Interrupt" {
     root.mac_lc_install(system, &m68k);
 
     // Vector 24 (Spurious) -> 0x4000
-    try m68k.memory.write32(0x60, 0x4000);
+    try m68k.memory.write32Bus(0x60, 0x4000, sd);
     // ISR at 0x4000: RTE
-    try m68k.memory.write16(0x4000, 0x4E73);
+    try m68k.memory.write16Bus(0x4000, 0x4E73, sd);
 
     m68k.pc = 0x1000;
     m68k.setSR(0x2000); // IPL 0
@@ -260,9 +246,9 @@ test "Interrupt Propagation: Vectorized Interrupt (External Vector 0x40)" {
     m68k.a[7] = 0x8000;
 
     // Vector 0x40 (64) -> 0x5000
-    try m68k.memory.write32(0x40 * 4, 0x5000);
+    try m68k.memory.write32Bus(0x40 * 4, 0x5000, sd);
     // ISR at 0x5000: RTE
-    try m68k.memory.write16(0x5000, 0x4E73);
+    try m68k.memory.write16Bus(0x5000, 0x4E73, sd);
 
     // Trigger Level 4 Interrupt with Vector 0x40
     m68k.setInterruptVector(4, 0x40);

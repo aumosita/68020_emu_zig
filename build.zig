@@ -342,4 +342,13 @@ pub fn build(b: *std.Build) void {
     iwm_tests.root_module.addImport("m68020", &lib.root_module);
     const run_iwm_tests = b.addRunArtifact(iwm_tests);
     test_step.dependOn(&run_iwm_tests.step);
+
+    const rom_boot_test = b.addTest(.{
+        .root_source_file = b.path("tests/integration/rom_boot_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    rom_boot_test.root_module.addImport("m68020", &lib.root_module);
+    const run_rom_boot_test = b.addRunArtifact(rom_boot_test);
+    test_step.dependOn(&run_rom_boot_test.step);
 }

@@ -258,41 +258,7 @@ pub const M68k = struct {
             self.recordProfiler(opcode, cycles);
             return self.finalizeStepCycles(cycles);
         }
-        // Hot-path optimization: common RTE format-0 frame unwind in supervisor mode.
-        if (opcode == 0x4E73) {
-            if (!self.getFlag(FLAG_S)) {
-                try self.enterException(8, self.pc, 0, null);
-                const cycles = 34 + fetch.penalty_cycles;
-                self.recordProfiler(opcode, cycles);
-                return self.finalizeStepCycles(cycles);
-            }
-            const sp = self.a[7];
-            if (sp + 7 < self.memory.size and (!self.memory.enforce_alignment or (sp & 1) == 0)) {
-                const frame_word_addr = sp + 6;
-                const fv_hi: u16 = self.memory.data[frame_word_addr];
-                const fv_lo: u16 = self.memory.data[frame_word_addr + 1];
-                const format_vector = (fv_hi << 8) | fv_lo;
-                const format: u4 = @truncate(format_vector >> 12);
-                if (format == 0) {
-                    const sr_hi: u16 = self.memory.data[sp];
-                    const sr_lo: u16 = self.memory.data[sp + 1];
-                    const restored_sr: u16 = (sr_hi << 8) | sr_lo;
-
-                    const b0: u32 = self.memory.data[sp + 2];
-                    const b1: u32 = self.memory.data[sp + 3];
-                    const b2: u32 = self.memory.data[sp + 4];
-                    const b3: u32 = self.memory.data[sp + 5];
-                    const restored_pc: u32 = (b0 << 24) | (b1 << 16) | (b2 << 8) | b3;
-
-                    self.a[7] = sp + 8;
-                    self.setSR(restored_sr);
-                    self.pc = restored_pc;
-                    const cycles = 20 + fetch.penalty_cycles;
-                    self.recordProfiler(opcode, cycles);
-                    return self.finalizeStepCycles(cycles);
-                }
-            }
-        }
+        // RTE: handled by executor.zig executeRte() using bus-path memory access
         M68k.current_instance = self;
         M68k.decode_fault_addr = null;
         M68k.decode_fault_kind = .Bus;
@@ -344,16 +310,6 @@ pub const M68k = struct {
                 return self.finalizeStepCycles(4 + fetch.penalty_cycles);
             },
             error.BusError => {
-                self.bus_retry_count = 0;
-                try self.enterBusErrorFrameA(self.pc, self.last_data_access_addr, .{
-                    .function_code = self.dfc,
-                    .space = .Data,
-                    .is_write = self.last_data_access_is_write,
-                });
-                const cycles = exception.faultCycles(.execute_data_access) + fetch.penalty_cycles;
-                return self.finalizeStepCycles(cycles);
-            },
-            error.InvalidAddress => {
                 self.bus_retry_count = 0;
                 try self.enterBusErrorFrameA(self.pc, self.last_data_access_addr, .{
                     .function_code = self.dfc,

@@ -416,88 +416,44 @@ pub const Memory = struct {
         }
     }
 
+    // Default BusAccess for backward-compatible flat API (supervisor data space)
+    const default_access: BusAccess = .{ .function_code = 0b101, .space = .Data, .is_write = false };
+    const default_write_access: BusAccess = .{ .function_code = 0b101, .space = .Data, .is_write = true };
+
+    /// Flat API — delegates to bus-path with default supervisor data access.
+    /// Prefer read8Bus() with explicit BusAccess for new code.
     pub fn read8(self: *const Memory, addr: u32) !u8 {
-        // 68020: Full 32-bit addressing (no mask)
-        if (addr >= self.size) {
-            return error.InvalidAddress;
-        }
-        return self.data[addr];
+        return self.read8Bus(addr, default_access);
     }
 
+    /// Flat API — delegates to bus-path with default supervisor data access.
     pub fn read16(self: *const Memory, addr: u32) !u16 {
-        // 68000 compatibility: check alignment
-        if (self.enforce_alignment and (addr & 1) != 0) {
-            return error.AddressError;
-        }
-
-        // 68020: Full 32-bit addressing
-        if (addr + 1 >= self.size) {
-            return error.InvalidAddress;
-        }
-        // Big-endian (Motorola byte order)
-        const high: u16 = self.data[addr];
-        const low: u16 = self.data[addr + 1];
-        return (high << 8) | low;
+        return self.read16Bus(addr, default_access);
     }
 
+    /// Flat API — delegates to bus-path with default supervisor data access.
     pub fn read32(self: *const Memory, addr: u32) !u32 {
-        // 68000 compatibility: check alignment
-        if (self.enforce_alignment and (addr & 1) != 0) {
-            return error.AddressError;
-        }
-
-        // 68020: Full 32-bit addressing
-        if (addr + 3 >= self.size) {
-            return error.InvalidAddress;
-        }
-        // Big-endian
-        const b0: u32 = self.data[addr];
-        const b1: u32 = self.data[addr + 1];
-        const b2: u32 = self.data[addr + 2];
-        const b3: u32 = self.data[addr + 3];
-        return (b0 << 24) | (b1 << 16) | (b2 << 8) | b3;
+        return self.read32Bus(addr, default_access);
     }
 
+    /// Flat API — delegates to bus-path with default supervisor write access.
+    /// Prefer write8Bus() with explicit BusAccess for new code.
     pub fn write8(self: *Memory, addr: u32, value: u8) !void {
-        // 68020: Full 32-bit addressing
-        if (addr >= self.size) {
-            return error.InvalidAddress;
-        }
-        self.data[addr] = value;
+        return self.write8Bus(addr, value, default_write_access);
     }
 
+    /// Flat API — delegates to bus-path with default supervisor write access.
     pub fn write16(self: *Memory, addr: u32, value: u16) !void {
-        // 68000 compatibility: check alignment
-        if (self.enforce_alignment and (addr & 1) != 0) {
-            return error.AddressError;
-        }
-
-        // 68020: Full 32-bit addressing
-        if (addr + 1 >= self.size) {
-            return error.InvalidAddress;
-        }
-        // Big-endian
-        self.data[addr] = @truncate(value >> 8);
-        self.data[addr + 1] = @truncate(value & 0xFF);
+        return self.write16Bus(addr, value, default_write_access);
     }
 
+    /// Flat API — delegates to bus-path with default supervisor write access.
     pub fn write32(self: *Memory, addr: u32, value: u32) !void {
-        // 68000 compatibility: check alignment
-        if (self.enforce_alignment and (addr & 1) != 0) {
-            return error.AddressError;
-        }
-
-        // 68020: Full 32-bit addressing
-        if (addr + 3 >= self.size) {
-            return error.InvalidAddress;
-        }
-        // Big-endian
-        self.data[addr] = @truncate(value >> 24);
-        self.data[addr + 1] = @truncate((value >> 16) & 0xFF);
-        self.data[addr + 2] = @truncate((value >> 8) & 0xFF);
-        self.data[addr + 3] = @truncate(value & 0xFF);
+        return self.write32Bus(addr, value, default_write_access);
     }
 
+    /// Direct binary load into data[] array. Used for initial program/ROM loading
+    /// before MMIO hooks are configured. Does NOT go through bus path.
     pub fn loadBinary(self: *Memory, data: []const u8, start_addr: u32) !void {
         // 68020: Full 32-bit addressing
         if (start_addr + data.len > self.size) {

@@ -197,15 +197,20 @@ pub const MacLcSystem = struct {
             return self.mmioRead32bit(addr, size);
         } else if (addr >= ROM_BASE_32 and addr <= ROM_END_32) {
             // 32-bit ROM
-            self.rom_overlay = false; // Accessing ROM area clears overlay
+            self.rom_overlay = false;
             const offset = addr - ROM_BASE_32;
             return self.readRom(offset, size);
         } else if (!self.address_mode_32) {
-            // 24-bit mode regions
-            return self.mmioRead24bit(addr, size);
+            // 24-bit mode I/O regions
+            if (self.mmioRead24bit(addr, size)) |val| return val;
         }
 
-        return null; // Fall through to memory.data[]
+        // ── RAM: route ALL RAM accesses through sys.ram[] ──
+        if (addr < self.ram_size) {
+            return self.readRam(addr, size);
+        }
+
+        return 0; // Unmapped regions read as 0
     }
 
     fn mmioRead32bit(self: *MacLcSystem, addr: u32, size: u8) ?u32 {
@@ -284,8 +289,7 @@ pub const MacLcSystem = struct {
             return self.iwm.read(addr);
         }
 
-        // RAM region — let it fall through to memory.data[]
-        return null;
+        return null; // Not an I/O register — handled by mmioRead's RAM fallback
     }
 
     // ────────────────────────────────────────────
@@ -297,26 +301,27 @@ pub const MacLcSystem = struct {
 
         // ── ROM Overlay write: writing to overlaid area goes to RAM ──
         if (self.rom_overlay and addr < self.rom_size) {
-            // Boot code writes to 0x000000 area — this goes to RAM
-            // We allow it to fall through to memory.data[]
-            self.rom_overlay = false; // Overlay cleared on first write
-            return false; // Let memory.data handle it
+            self.rom_overlay = false;
         }
 
-        _ = size;
         const val8: u8 = @truncate(value);
 
         if (addr >= IO_BASE_32) {
             return self.mmioWrite32bit(addr, val8, value);
         } else if (addr >= ROM_BASE_32 and addr <= ROM_END_32) {
-            // ROM is read-only — ignore writes
             self.rom_overlay = false;
-            return true;
+            return true; // ROM is read-only — ignore
         } else if (!self.address_mode_32) {
-            return self.mmioWrite24bit(addr, val8, value);
+            if (self.mmioWrite24bit(addr, val8, value)) return true;
         }
 
-        return false;
+        // ── RAM: route ALL RAM writes through sys.ram[] ──
+        if (addr < self.ram_size) {
+            self.writeRam(addr, size, value);
+            return true;
+        }
+
+        return true; // Absorb writes to unmapped regions
     }
 
     fn mmioWrite32bit(self: *MacLcSystem, addr: u32, val8: u8, value: u32) bool {
@@ -406,7 +411,55 @@ pub const MacLcSystem = struct {
             return true;
         }
 
-        return false; // Not MMIO — falls through to memory.data[]
+        return false; // Not an I/O register — handled by mmioWrite's RAM fallback
+    }
+
+    // ────────────────────────────────────────────
+    //  RAM Access Helpers
+    // ────────────────────────────────────────────
+
+    fn readRam(self: *const MacLcSystem, addr: u32, size: u8) u32 {
+        if (addr >= self.ram_size) return 0;
+        return switch (size) {
+            1 => self.ram[addr],
+            2 => blk: {
+                if (addr + 1 >= self.ram_size) break :blk @as(u32, 0);
+                const hi: u32 = self.ram[addr];
+                const lo: u32 = self.ram[addr + 1];
+                break :blk (hi << 8) | lo;
+            },
+            4 => blk: {
+                if (addr + 3 >= self.ram_size) break :blk @as(u32, 0);
+                const b0: u32 = self.ram[addr];
+                const b1: u32 = self.ram[addr + 1];
+                const b2: u32 = self.ram[addr + 2];
+                const b3: u32 = self.ram[addr + 3];
+                break :blk (b0 << 24) | (b1 << 16) | (b2 << 8) | b3;
+            },
+            else => 0,
+        };
+    }
+
+    fn writeRam(self: *MacLcSystem, addr: u32, size: u8, value: u32) void {
+        if (addr >= self.ram_size) return;
+        switch (size) {
+            1 => {
+                self.ram[addr] = @truncate(value);
+            },
+            2 => {
+                if (addr + 1 >= self.ram_size) return;
+                self.ram[addr] = @truncate(value >> 8);
+                self.ram[addr + 1] = @truncate(value);
+            },
+            4 => {
+                if (addr + 3 >= self.ram_size) return;
+                self.ram[addr] = @truncate(value >> 24);
+                self.ram[addr + 1] = @truncate(value >> 16);
+                self.ram[addr + 2] = @truncate(value >> 8);
+                self.ram[addr + 3] = @truncate(value);
+            },
+            else => {},
+        }
     }
 
     // ────────────────────────────────────────────
