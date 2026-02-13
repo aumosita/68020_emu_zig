@@ -376,3 +376,41 @@ const amiga_regions = [_]bus_cycle.WaitStateRegion{
 | 코드 변경 | scsi.zig: 56→290줄, adb.zig: 31→410줄 |
 | 신규 테스트 | 15개 (SCSI 7, ADB 8) |
 | 전체 테스트 통과 | **133/133** ✅ |
+
+---
+
+## Phase 2.8: Mac LC 메모리 맵 및 ROM 부팅 지원 (2026-02-14) ✅
+
+### 작업 기간
+- 시작: 2026-02-14 01:00
+- 완료: 2026-02-14 01:05
+- **총 소요 시간: 약 5분**
+
+### 완료된 작업
+
+#### 1. Mac LC Memory Map (`src/systems/mac_lc.zig`) ✅
+- **ROM Overlay**: CPU 리셋 시 ROM이 `0x000000`에 매핑, 첫 ROM 영역 접근 시 자동 해제 로직 구현.
+- **주소 변환 (Address Translation)**:
+  - **24-bit Mode**: RAM(`0x00`-`0x3F`), ROM(`0x40`/`0xF0`), VIA1(`0x90`), RBV(`0xD0`), SCSI(`0x58`)
+  - **32-bit Mode**: RAM(`0x00000000`), ROM(`0x40000000`), I/O(`0x50000000`)
+- **ROM 미러링**: 24-bit 모드에서 `0xF00000` 영역이 `0x400000` ROM 미러링.
+- **ROM 읽기 전용**: ROM 영역 쓰기 시도 무시 (Silent Ignore).
+
+#### 2. ROM 파일 로딩 구현 ✅
+- `MacLcSystem.init()`에서 `rom_path` 인자를 받아 실제 파일 로딩.
+- 파일이 없거나 실패 시 더미(Dummy) ROM 할당으로 Fallback.
+
+#### 3. 통합 테스트 (`tests/integration/memory_map_test.zig`) ✅
+- **테스트 케이스 (7건)**:
+  1. ROM Overlay 활성화 및 벡터 읽기 검증.
+  2. ROM 영역 접근 후 Overlay 해제 검증.
+  3. ROM 읽기 전용 속성 검증.
+  4. 24-bit ROM 미러링 검증.
+  5. VIA1, SCSI MMIO 접근 검증.
+
+### 성과 지표
+| 항목 | 값 |
+|------|-----|
+| 신규 테스트 | 7개 (Memory Map Integration) |
+| 전체 테스트 통과 | **140/140** ✅ |
+
