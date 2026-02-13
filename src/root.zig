@@ -406,6 +406,7 @@ pub export fn mac_lc_install(sys: *mac_lc.MacLcSystem, m68k: *cpu.M68k) void {
     m68k.memory.setBusHook(mac_lc.MacLcSystem.busHook, sys);
     m68k.memory.setAddressTranslator(mac_lc.MacLcSystem.addressTranslator, sys);
     m68k.memory.setMmio(mac_lc.MacLcSystem.mmioRead, mac_lc.MacLcSystem.mmioWrite, sys);
+    mac_lc.MacLcSystem.configureBusCycles(&m68k.memory);
 }
 
 pub export fn mac_lc_sync(sys: *MacLcSystem, cycles: u32) void {

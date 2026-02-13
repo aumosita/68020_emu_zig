@@ -61,11 +61,12 @@
 **에뮬레이션 정확도(Accuracy)**를 높이기 위한 기술적 심화 과제입니다.
 
 ### CPU 및 버스 정확도
-- [ ] **버스 사이클(Bus Cycle) 정밀 모델링**
-    - 파이프라인(Fetch/Decode/Execute) 단계별 소요 사이클 정밀화.
-    - 외부 느린 장치(ROM 등) 접근 시 Wait State 반영.
-- [ ] **EA (Effective Address) 계산 비용 현실화**
-    - 68020 매뉴얼 기반의 Addressing Mode별 사이클 테이블 적용 및 회귀 테스트 추가.
+- [x] **버스 사이클(Bus Cycle) 정밀 모델링**
+    - [x] memory.zig readXBus/writeXBus에 wait state penalty 통합.
+    - [x] Mac LC wait states: RAM(0ws), ROM(2ws), I/O(4ws) 설정.
+- [x] **EA (Effective Address) 계산 비용 현실화**
+    - [x] NEG/NEGX/CLR/NOT/TST/LEA/Scc/BTST/BSET/BCLR/BCHG에 EA 사이클 적용.
+    - [x] 미사용 InstructionCycles 삭제.
 
 ### 성능 및 안정성
 - [ ] **메모리 할당 최적화**

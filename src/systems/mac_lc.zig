@@ -7,6 +7,7 @@ const scsi = @import("../hw/scsi.zig");
 const adb = @import("../hw/adb.zig");
 const rtc = @import("../hw/rtc.zig");
 const scc_mod = @import("../hw/scc.zig");
+const bus_cycle = @import("../core/bus_cycle.zig");
 const Scheduler = @import("../core/scheduler.zig").Scheduler;
 
 pub const MacLcSystem = struct {
@@ -120,6 +121,29 @@ pub const MacLcSystem = struct {
         }
 
         return sys;
+    }
+
+    /// Configure bus cycle wait states for Mac LC hardware.
+    /// Call after mac_lc_install() to enable accurate bus timing.
+    pub fn configureBusCycles(mem: *memory.Memory) void {
+        // Mac LC (16MHz 68020) wait states:
+        //   RAM (0x000000-0x3FFFFF): 0 wait states
+        //   ROM (0x400000-0x4FFFFF): 2 wait states
+        //   I/O (0x500000-0x9FFFFF): 4 wait states  (VIA, SCSI, SCC, etc.)
+        //   RBV/Misc (0xC00000-0xFFFFFF): 4 wait states
+        const S = struct {
+            const regions = [_]bus_cycle.WaitStateRegion{
+                .{ .start = 0x000000, .end_exclusive = 0x400000, .wait_states = 0 }, // RAM
+                .{ .start = 0x400000, .end_exclusive = 0x500000, .wait_states = 2 }, // ROM
+                .{ .start = 0x500000, .end_exclusive = 0xA00000, .wait_states = 4 }, // I/O
+                .{ .start = 0xC00000, .end_exclusive = 0x1000000, .wait_states = 4 }, // SCC/IWM/ROM mirror
+            };
+        };
+        mem.bus_cycle_sm.config = .{
+            .default_wait_states = 0,
+            .region_wait_states = &S.regions,
+        };
+        mem.setBusCycleEnabled(true);
     }
 
     pub fn deinit(self: *MacLcSystem, allocator: std.mem.Allocator) void {
