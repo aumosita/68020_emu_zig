@@ -450,8 +450,11 @@ pub const MacLcSystem = struct {
         const clk = (pb & 0x02) != 0;
         const enable = (pb & 0x04) == 0;
         const data_out = self.rtc.step(clk, data_in, enable);
-        if (enable and !((self.via1.ddr_b & 0x01) != 0)) {
-            if (data_out) self.via1.port_b |= 0x01 else self.via1.port_b &= ~@as(u8, 0x01);
+        // RTC data-out drives PB0 as external input (when PB0 is configured as input)
+        if (data_out) {
+            self.via1.port_b_input |= 0x01;
+        } else {
+            self.via1.port_b_input &= ~@as(u8, 0x01);
         }
     }
 
@@ -461,9 +464,8 @@ pub const MacLcSystem = struct {
         const st1 = (pb & 0x20) != 0;
         const data_in = self.via1.port_a;
         const data_out = self.adb.step(st0, st1, data_in);
-        if (!((self.via1.ddr_a & 0x80) != 0)) {
-            self.via1.port_a = data_out;
-        }
+        // ADB data-out drives PA as external input
+        self.via1.port_a_input = data_out;
     }
 
     pub fn sync(self: *MacLcSystem, cycles: u32) void {
