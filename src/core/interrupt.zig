@@ -30,19 +30,6 @@ pub fn handlePendingInterrupt(self: *cpu.M68k) !bool {
 }
 
 pub fn setInterruptRequest(self: *cpu.M68k, level: u3, vector: ?u8) void {
-    if (level == 0) {
-        self.pending_irq_level = 0;
-        self.pending_irq_vector = null;
-        return;
-    }
-
-    if (level > self.pending_irq_level) {
-        self.pending_irq_level = level;
-        self.pending_irq_vector = vector;
-        return;
-    }
-
-    if (level == self.pending_irq_level and vector != null and self.pending_irq_vector == null) {
-        self.pending_irq_vector = vector;
-    }
+    self.pending_irq_level = level;
+    self.pending_irq_vector = vector;
 }

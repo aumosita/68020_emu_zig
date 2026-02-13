@@ -9,12 +9,12 @@
 **시스템 안정화 및 핵심 아키텍처 완성**을 위한 필수 과제입니다.
 
 ### 아키텍처 및 스케줄러 통합
-- [ ] **이벤트 스케줄러 통합 확대**
+- [x] **이벤트 스케줄러 통합 확대**
     - 현재 `VIA6522`와 `MacLcSystem`에 적용된 중앙 스케줄러를 `RBV` 및 `Video` 하위 시스템까지 확대 적용.
-    - 정밀한 비디오 타이밍(VBL/HBL) 동기화 구현.
-- [ ] **인터럽트 처리 검증 강화**
-    - VIA/RBV 인터럽트가 CPU Core로 정확하게 전파되는지 검증하는 시나리오 테스트 보강.
-    - 중첩 인터럽트(Nested Interrupts) 및 우선순위 처리 로직의 Edge Case 검증.
+    - [x] 정밀한 비디오 타이밍(VBL/HBL) 동기화 구현.
+- [x] **인터럽트 처리 검증 강화**
+    - [x] VIA/RBV 인터럽트가 CPU Core로 정확하게 전파되는지 검증하는 시나리오 테스트 보강. (완료: `tests/integration/interrupt_propagation.zig`)
+    - [x] 중첩 인터럽트(Nested Interrupts) 및 우선순위 처리 로직의 Edge Case 검증. (완료: Priority Masking, Spurious, Vectorized 테스트 추가)
 
 ### 주변 장치 프로토콜 고도화
 - [ ] **SCSI (NCR 5380) 정밀화**

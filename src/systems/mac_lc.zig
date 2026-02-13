@@ -135,8 +135,7 @@ pub const MacLcSystem = struct {
             }
         }
 
-        if (addr < self.ram.len) return self.ram[addr];
-        return 0xFF; // Handled? Return null means not handled?
+        return null; // Not MMIO, handled by memory (RAM/ROM)
         // Wait, memory.zig says if read returns val, return it.
         // If null, proceed to array read?
         // No, mmio_read is checked FIRST.

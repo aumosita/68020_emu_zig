@@ -280,6 +280,14 @@ pub fn build(b: *std.Build) void {
     video_timing_tests.root_module.addImport("m68020", &lib.root_module);
     const run_video_timing_tests = b.addRunArtifact(video_timing_tests);
 
+    const interrupt_propagation_tests = b.addTest(.{
+        .root_source_file = b.path("tests/integration/interrupt_propagation.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    interrupt_propagation_tests.root_module.addImport("m68020", &lib.root_module);
+    const run_interrupt_propagation_tests = b.addRunArtifact(interrupt_propagation_tests);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_exe_unit_tests.step);
@@ -288,4 +296,5 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_mac_lc_tests.step);
     test_step.dependOn(&run_interrupts_tests.step);
     test_step.dependOn(&run_video_timing_tests.step);
+    test_step.dependOn(&run_interrupt_propagation_tests.step);
 }
