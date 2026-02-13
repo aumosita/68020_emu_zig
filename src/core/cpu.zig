@@ -71,18 +71,18 @@ pub const M68k = struct {
     profiler_data: ?*CycleProfilerData = null,
     pipeline_mode: PipelineMode,
     allocator: std.mem.Allocator,
-    
+
     pub const CycleProfilerData = struct {
         instruction_counts: [256]u64 = [_]u64{0} ** 256,
         instruction_cycles: [256]u64 = [_]u64{0} ** 256,
         total_steps: u64 = 0,
         total_cycles: u64 = 0,
     };
-    
+
     pub fn init(allocator: std.mem.Allocator) M68k {
         return initWithConfig(allocator, .{});
     }
-    
+
     pub fn initWithConfig(allocator: std.mem.Allocator, config: memory.MemoryConfig) M68k {
         return M68k{
             .d = [_]u32{0} ** 8,
@@ -125,20 +125,26 @@ pub const M68k = struct {
             .allocator = allocator,
         };
     }
-    
+
     pub fn deinit(self: *M68k) void {
         if (self.profiler_data) |data| {
             self.allocator.destroy(data);
         }
         self.memory.deinit();
     }
-    
+
     pub fn reset(self: *M68k) void {
         for (&self.d) |*reg| reg.* = 0;
         for (&self.a) |*reg| reg.* = 0;
-        self.a[7] = self.memory.read32(self.getExceptionVector(0)) catch 0;
-        self.pc = self.memory.read32(self.getExceptionVector(1)) catch 0;
         self.sr = 0x2700;
+        // Use bus path (MMIO/overlay-aware) for reset vectors
+        const supervisor_data = memory.BusAccess{
+            .function_code = 0b101, // Supervisor data
+            .space = .Data,
+            .is_write = false,
+        };
+        self.a[7] = self.memory.read32Bus(self.getExceptionVector(0), supervisor_data) catch 0;
+        self.pc = self.memory.read32Bus(self.getExceptionVector(1), supervisor_data) catch 0;
         self.isp = self.a[7];
         self.msp = self.a[7];
         self.usp = 0;
@@ -157,15 +163,15 @@ pub const M68k = struct {
         self.bus_retry_count = 0;
         _ = self.memory.takeSplitCyclePenalty();
     }
-    
+
     pub fn getExceptionVector(self: *const M68k, vector_number: u8) u32 {
         return exception.getExceptionVector(self, vector_number);
     }
-    
+
     pub fn readWord(self: *const M68k, addr: u32) u16 {
         return self.memory.read16(addr) catch 0;
     }
-    
+
     pub fn step(self: *M68k) !u32 {
         _ = self.memory.takeSplitCyclePenalty();
         if (try self.handlePendingInterrupt()) {
@@ -387,12 +393,12 @@ pub const M68k = struct {
         }
         return self.finalizeStepCycles(final_cycles);
     }
-    
+
     threadlocal var current_instance: ?*const M68k = null;
     const DecodeFaultKind = enum { Bus, Address };
     threadlocal var decode_fault_addr: ?u32 = null;
     threadlocal var decode_fault_kind: DecodeFaultKind = .Bus;
-    
+
     fn globalReadWord(addr: u32) u16 {
         if (M68k.current_instance) |inst| {
             const access = memory.BusAccess{
@@ -411,7 +417,7 @@ pub const M68k = struct {
         }
         return 0;
     }
-    
+
     pub fn execute(self: *M68k, target_cycles: u32) !u32 {
         var executed: u32 = 0;
         while (executed < target_cycles) {
@@ -425,15 +431,15 @@ pub const M68k = struct {
         self.last_data_access_addr = addr;
         self.last_data_access_is_write = is_write;
     }
-    
+
     pub inline fn getFlag(self: *const M68k, comptime flag: u16) bool {
         return registers.getFlag(self, flag);
     }
-    
+
     pub inline fn setFlag(self: *M68k, comptime flag: u16, value: bool) void {
         registers.setFlag(self, flag, value);
     }
-    
+
     pub inline fn setFlags(self: *M68k, result: u32, size: decoder.DataSize) void {
         registers.setFlags(self, result, size);
     }
@@ -528,7 +534,7 @@ pub const M68k = struct {
         std.debug.print("Total Cycles:       {}\n", .{data.total_cycles});
         std.debug.print("Avg Cycles/Inst:    {d:.2}\n", .{@as(f64, @floatFromInt(data.total_cycles)) / @as(f64, @floatFromInt(data.total_steps))});
         std.debug.print("\nTop 10 Instruction Groups by Cycle Usage:\n", .{});
-        
+
         const Entry = struct { group: u8, cycles: u64, count: u64 };
         var entries: [256]Entry = undefined;
         for (0..256) |i| {
@@ -546,7 +552,7 @@ pub const M68k = struct {
         for (entries) |e| {
             if (e.cycles == 0 or shown >= 10) break;
             const percentage = (@as(f64, @floatFromInt(e.cycles)) / @as(f64, @floatFromInt(data.total_cycles))) * 100.0;
-            std.debug.print("{:2}. Group 0x{X:02}: {:10} cycles ({:6.2}%) - Executed {:8} times\n", .{shown + 1, e.group, e.cycles, percentage, e.count});
+            std.debug.print("{:2}. Group 0x{X:02}: {:10} cycles ({:6.2}%) - Executed {:8} times\n", .{ shown + 1, e.group, e.cycles, percentage, e.count });
             shown += 1;
         }
         std.debug.print("-----------------------------------\n", .{});
@@ -600,7 +606,7 @@ pub const M68k = struct {
         const set_index: usize = @intCast(long_addr & (ICacheSets - 1));
         const tag = long_addr >> std.math.log2_int(u32, ICacheSets);
         const use_low_word = (addr & 0x2) != 0;
-        
+
         // Way lookup
         for (0..ICacheWays) |way| {
             var line = &self.icache[set_index][way];
@@ -610,7 +616,7 @@ pub const M68k = struct {
                 // Flip other way's LRU if it was true
                 const other_way = 1 - way;
                 self.icache[set_index][other_way].lru = false;
-                
+
                 const opcode: u16 = if (use_low_word)
                     @truncate(line.data & 0xFFFF)
                 else
@@ -618,11 +624,11 @@ pub const M68k = struct {
                 return .{ .opcode = opcode, .penalty_cycles = 0 };
             }
         }
-        
+
         self.icache_miss_count += 1;
         const aligned_addr = addr & ~@as(u32, 0x3);
         const fetched = try self.memory.read32Bus(aligned_addr, access);
-        
+
         // Replacement policy: find invalid way or use LRU
         var target_way: usize = 0;
         if (self.icache[set_index][0].valid and !self.icache[set_index][0].lru) {
@@ -637,10 +643,10 @@ pub const M68k = struct {
             // Both valid, use the one with lru=false
             target_way = if (self.icache[set_index][0].lru) @as(usize, 1) else @as(usize, 0);
         }
-        
+
         self.icache[set_index][target_way] = .{ .valid = true, .tag = tag, .data = fetched, .lru = true };
         self.icache[set_index][1 - target_way].lru = false;
-        
+
         const opcode: u16 = if (use_low_word)
             @truncate(fetched & 0xFFFF)
         else
@@ -742,4 +748,3 @@ pub const M68k = struct {
 test {
     _ = @import("cpu_test.zig");
 }
-

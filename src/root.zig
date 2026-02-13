@@ -9,6 +9,7 @@ const video = @import("hw/video.zig");
 const scsi = @import("hw/scsi.zig");
 const adb = @import("hw/adb.zig");
 const scc_mod = @import("hw/scc.zig");
+const iwm_mod = @import("hw/iwm.zig");
 const mac_lc = @import("systems/mac_lc.zig");
 const scheduler = @import("core/scheduler.zig");
 
@@ -22,6 +23,7 @@ pub const Rbv = rbv.Rbv;
 pub const Scsi5380 = scsi.Scsi5380;
 pub const Adb = adb.Adb;
 pub const Scc = scc_mod.Scc;
+pub const Iwm = iwm_mod.Iwm;
 pub const MacLcSystem = mac_lc.MacLcSystem;
 pub const Scheduler = scheduler.Scheduler;
 
@@ -419,6 +421,32 @@ pub export fn mac_lc_get_irq(sys: *mac_lc.MacLcSystem) bool {
 
 pub export fn mac_lc_get_irq_level(sys: *mac_lc.MacLcSystem) u8 {
     return sys.getIrqLevel();
+}
+
+/// Reset the CPU using MMIO-aware read path (loads SSP and PC from ROM overlay).
+pub export fn mac_lc_reset(sys: *mac_lc.MacLcSystem, m68k: *cpu.M68k) void {
+    sys.resetOverlay(); // ROM overlay active after hardware reset
+    m68k.reset(); // Uses read32Bus() → MMIO → ROM overlay → correct SSP/PC
+}
+
+/// Run `max_steps` CPU steps with full integration:
+///   step → sync → IRQ check → repeat
+/// Returns total cycles consumed.
+pub export fn mac_lc_run_steps(sys: *mac_lc.MacLcSystem, m68k: *cpu.M68k, max_steps: u32) u32 {
+    var total: u32 = 0;
+    var i: u32 = 0;
+    while (i < max_steps) : (i += 1) {
+        const cycles = m68k.step() catch break;
+        sys.sync(cycles);
+        total += cycles;
+
+        // Check for pending interrupts
+        const irq = sys.getIrqLevel();
+        if (irq > 0) {
+            m68k.setInterruptLevel(@truncate(irq));
+        }
+    }
+    return total;
 }
 
 test "basic library test" {

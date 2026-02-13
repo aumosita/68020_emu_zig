@@ -39,21 +39,17 @@
     - [x] ROM 초기화에서 반드시 SCC 폴링 → 미구현 시 Bus Error 크래시.
     - [x] 24-bit: `0xC00000`–`0xCFFFFF`, 32-bit: `0x50004000`–`0x50005FFF`.
     - [x] 최소: RR0 읽기 → Tx Empty 비트 반환.
-- [ ] **IWM/SWIM (플로피 컨트롤러) 스텁 구현**
-    - ROM이 드라이브 감지를 위해 접근 → 미구현 시 Bus Error.
-    - 24-bit: `0xE00000`–`0xEFFFFF`, 32-bit: `0x50016000`–`0x50017FFF`.
-    - 최소: 상태 레지스터 → `0xFF` ("드라이브 없음") 반환.
-- [ ] **`cpu.reset()` MMIO 경로 사용**
-    - 현재 `reset()`이 flat `memory.read32()`를 사용 → ROM overlay 미경유.
-    - `read32Bus()` 사용으로 수정 필요.
-- [ ] **`mmioRead24bit` ROM 다중바이트 읽기 버그 수정**
-    - 24-bit ROM 접근 시 `size` 파라미터 무시 → 1바이트만 반환됨.
-    - `readRomByte()` → `readRom(offset, size)` 수정.
-- [ ] **RBV 미구현 레지스터 방어 코드**
-    - 현재 3개 레지스터만 구현 (IFR, IER, MonType).
-    - Slot Interrupt, Video Timing 등 미구현 주소 → 0 반환 필요.
-- [ ] **통합 실행 루프 구현**
-    - ROM 로드 → `cpu.reset()` → step loop → IRQ 체크 → `sync()` 전체 흐름 완성.
+- [x] **IWM/SWIM (플로피 컨트롤러) 스텁 구현**
+    - [x] 상태 레지스터 → `0xFF` ("드라이브 없음") 반환.
+    - [x] 24-bit/32-bit MMIO 경로 연결.
+- [x] **`cpu.reset()` MMIO 경로 사용**
+    - [x] `read32Bus()` (supervisor FC) 사용으로 ROM overlay 동작.
+- [x] **`mmioRead24bit` ROM 다중바이트 읽기 버그 수정**
+    - [x] `readRomByte()` → `readRom(offset, size)` 수정.
+- [x] **RBV 미구현 레지스터 방어 코드**
+    - [x] `else => 0` 기본 반환 확인.
+- [x] **통합 실행 루프 구현**
+    - [x] `mac_lc_reset()` + `mac_lc_run_steps()` API 추가.
 
 ---
 

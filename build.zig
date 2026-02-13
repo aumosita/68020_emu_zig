@@ -333,4 +333,13 @@ pub fn build(b: *std.Build) void {
     scc_tests.root_module.addImport("m68020", &lib.root_module);
     const run_scc_tests = b.addRunArtifact(scc_tests);
     test_step.dependOn(&run_scc_tests.step);
+
+    const iwm_tests = b.addTest(.{
+        .root_source_file = b.path("tests/core/iwm_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    iwm_tests.root_module.addImport("m68020", &lib.root_module);
+    const run_iwm_tests = b.addRunArtifact(iwm_tests);
+    test_step.dependOn(&run_iwm_tests.step);
 }

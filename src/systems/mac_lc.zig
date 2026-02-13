@@ -7,6 +7,7 @@ const scsi = @import("../hw/scsi.zig");
 const adb = @import("../hw/adb.zig");
 const rtc = @import("../hw/rtc.zig");
 const scc_mod = @import("../hw/scc.zig");
+const iwm_mod = @import("../hw/iwm.zig");
 const bus_cycle = @import("../core/bus_cycle.zig");
 const Scheduler = @import("../core/scheduler.zig").Scheduler;
 
@@ -18,6 +19,7 @@ pub const MacLcSystem = struct {
     adb: adb.Adb,
     rtc: rtc.Rtc,
     scc: scc_mod.Scc,
+    iwm: iwm_mod.Iwm,
 
     // Scheduler
     scheduler: Scheduler,
@@ -55,6 +57,8 @@ pub const MacLcSystem = struct {
     const SCC_END_24: u32 = 0xCFFFFF;
     const ROM_MIRROR_BASE_24: u32 = 0xF00000;
     const ROM_MIRROR_END_24: u32 = 0xFFFFFF;
+    const IWM_BASE_24: u32 = 0xE00000;
+    const IWM_END_24: u32 = 0xEFFFFF;
 
     // 32-bit mode
     const ROM_BASE_32: u32 = 0x40000000;
@@ -70,6 +74,8 @@ pub const MacLcSystem = struct {
     const RBV_END_32: u32 = 0x50027FFF;
     const SCC_BASE_32: u32 = 0x50004000;
     const SCC_END_32: u32 = 0x50005FFF;
+    const IWM_BASE_32: u32 = 0x50016000;
+    const IWM_END_32: u32 = 0x50017FFF;
     const VRAM_BASE_32: u32 = 0x50F40000;
 
     const ROM_SIZE_MAX: u32 = 512 * 1024; // 512KB
@@ -84,6 +90,7 @@ pub const MacLcSystem = struct {
         sys.adb = adb.Adb.init();
         sys.rtc = rtc.Rtc.init();
         sys.scc = scc_mod.Scc.init();
+        sys.iwm = iwm_mod.Iwm.init();
         sys.scheduler = Scheduler.init(allocator);
         sys.address_mode_32 = false; // Default to 24-bit
         sys.rom_overlay = true; // Overlay active after reset
@@ -218,6 +225,9 @@ pub const MacLcSystem = struct {
         if (addr >= SCC_BASE_32 and addr <= SCC_END_32) {
             return self.scc.read(addr);
         }
+        if (addr >= IWM_BASE_32 and addr <= IWM_END_32) {
+            return self.iwm.read(addr);
+        }
         if (addr >= VRAM_BASE_32) {
             const offset = addr - VRAM_BASE_32;
             if (offset + size <= self.video.vram.len) {
@@ -233,20 +243,19 @@ pub const MacLcSystem = struct {
     }
 
     fn mmioRead24bit(self: *MacLcSystem, addr: u32, size: u8) ?u32 {
-        _ = size;
 
         // ROM (0x400000-0x4FFFFF)
         if (addr >= ROM_BASE_24 and addr <= ROM_END_24) {
             self.rom_overlay = false;
             const offset = addr - ROM_BASE_24;
-            return self.readRomByte(offset);
+            return self.readRom(offset, size);
         }
 
         // ROM mirror (0xF00000-0xFFFFFF)
         if (addr >= ROM_MIRROR_BASE_24 and addr <= ROM_MIRROR_END_24) {
             self.rom_overlay = false;
             const offset = addr - ROM_MIRROR_BASE_24;
-            return self.readRomByte(offset);
+            return self.readRom(offset, size);
         }
 
         // VIA1 (0x900000-0x9FFFFF)
@@ -268,6 +277,11 @@ pub const MacLcSystem = struct {
         // SCC (0xC00000-0xCFFFFF)
         if (addr >= SCC_BASE_24 and addr <= SCC_END_24) {
             return self.scc.read(addr);
+        }
+
+        // IWM (0xE00000-0xEFFFFF)
+        if (addr >= IWM_BASE_24 and addr <= IWM_END_24) {
+            return self.iwm.read(addr);
         }
 
         // RAM region — let it fall through to memory.data[]
@@ -341,6 +355,10 @@ pub const MacLcSystem = struct {
             self.scc.write(addr, val8);
             return true;
         }
+        if (addr >= IWM_BASE_32 and addr <= IWM_END_32) {
+            self.iwm.write(addr, val8);
+            return true;
+        }
         return false;
     }
 
@@ -379,6 +397,12 @@ pub const MacLcSystem = struct {
         // SCC
         if (addr >= SCC_BASE_24 and addr <= SCC_END_24) {
             self.scc.write(addr, val8);
+            return true;
+        }
+
+        // IWM
+        if (addr >= IWM_BASE_24 and addr <= IWM_END_24) {
+            self.iwm.write(addr, val8);
             return true;
         }
 
