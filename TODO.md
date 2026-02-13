@@ -1,6 +1,31 @@
 # TODO
 
-## 현재 상태(2026-02-11 기준)
+## Macintosh LC 및 System 6.0.8 구동 로드맵
+
+System 6.0.8 구동을 위한 단계별 할 일 목록입니다.
+
+### 1단계: 주변 장치(Peripherals) 기초 구현
+- [x] **VIA 6522 기초 구현**: 타이머, 인터럽트 플래그 로직 (완료)
+- [x] **메모리 맵 및 MMIO 라우팅**: Mac LC의 24/32비트 I/O 영역 라우팅 엔진 구현 (완료)
+- [x] **RTC (Real Time Clock)**: 초 단위 시계 및 PRAM(Non-volatile RAM) 256바이트 구현 (완료)
+- [x] **RBV (VIA2) & VBL**: 인터럽트 제어 및 수직 동기화 신호 발생 (완료)
+- [x] **Video Framebuffer**: VRAM 및 8비트 Palette(VDAC) 기초 구현 (완료)
+- [x] **SCSI (NCR 5380)**: 컨트롤러 레지스터 기초 설계 (완료)
+- [x] **ADB (Apple Desktop Bus)**: 키보드/마우스 통신 인터페이스 통합 (완료)
+
+### 2단계: 시스템 고도화 및 정밀도 증진 (신규 로드맵)
+- [ ] **CPU: 버스 사이클 정확도 (Bus-Cycle Accuracy)**: 파이프라인(Fetch/Decode/Execute) 모델링 및 Wait States 반영
+- [ ] **중앙 이벤트 스케줄러 (Event Scheduler)**: 장치 간 타이밍 동기화를 위한 이벤트 큐 아키텍처 도입
+- [ ] **주변 장치 프로토콜 정밀화**: SCSI Phase 전환 로직 및 ADB 비트 타이밍 구현
+- [ ] **사운드 및 비디오 타이밍 정밀화**: Apple Sound Chip 샘플링 동기화 및 HBL 타이밍 반영
+
+### 3단계: 시스템 아키텍처 완성
+- [ ] **Mac LC 메모리 맵 최종 구성**:
+    - ROM: 0x400000 (또는 기종별 위치) 매핑 및 로딩
+    - RAM: 0x000000 시작, 동적 크기 할당
+- [ ] **ROM 부팅 및 Trap(A-Line) 핸들링 검증**
+
+## 현재 상태(2026-02-13 기준)
 
 - 예외/트랩 핵심 보강 완료:
   - `BKPT` 디버거 훅 + 미연결 시 `vector 4` 폴백
@@ -160,10 +185,10 @@
 
 #### 코드 품질
 
-- **코드 모듈화 개선**
-  - `cpu.zig` 분리: 예외 처리(`exception.zig`), 인터럽트(`interrupt.zig`), 레지스터 접근(`registers.zig`)
-  - 목표: 단일 파일 3,600줄 → 각 모듈 1,000줄 이하로 분할
-  - 이유: 유지보수성 향상, 컴파일 시간 단축
+- **코드 모듈화 개선** ✅
+  - ✅ `cpu.zig` 분리: 예외 처리(`exception.zig`), 인터럽트(`interrupt.zig`), 레지스터 접근(`registers.zig`)
+  - ✅ 목표 달성: 단일 파일 3,600줄 → 각 모듈 1,000줄 이하로 분할 (cpu.zig 현재 745줄)
+  - ✅ 테스트 코드 `cpu_test.zig`로 분리하여 유지보수성 향상
 
 - **에러 처리 통합**
   - Zig 내부 `anyerror` → 구조화된 에러 타입 전환
@@ -207,27 +232,21 @@
   - Coverage 도구 연동 검토 (kcov, Zig 0.14+ 네이티브 지원 대기)
   - CI/CD 성능 회귀 검사 통합 (벤치마크 자동 실행 + 추이 그래프)
 
-#### 버스 및 사이클 정밀성 (Phase 2)
+#### 버스 및 사이클 정밀성 (Phase 2) ✅
 
-- **버스 에러 복구 메커니즘 강화**
-  - 버스 에러 발생 시 재시도 카운터 추가 (최대 3회)
-  - 재시도 실패 시 예외 프레임에 시도 횟수 기록
-  - API: `setBusRetryLimit`, `getBusRetryCount`
-  - 작업량: 1일
+- **버스 에러 복구 메커니즘 강화** ✅
+  - ✅ 버스 에러 발생 시 재시도 카운터 추가 (최대 3회)
+  - ✅ 재시도 실패 시 예외 프레임에 시도 횟수 기록
+  - ✅ API: `setBusRetryLimit`, `getBusRetryCount`
 
-- **I-Cache 2-way set associative 개선**
-  - 현재: 64 entry direct-mapped → 32 set x 2-way
-  - LRU(Least Recently Used) 교체 정책
-  - 히트율 10-15% 향상 예상 (벤치 워크로드 기준 측정)
-  - 옵션 플래그로 기존 모델과 병행 지원
-  - 작업량: 2일
+- **I-Cache 2-way set associative 개선** ✅
+  - ✅ 32 set x 2-way (64 entry) 구조 구현
+  - ✅ LRU(Least Recently Used) 교체 정책 적용
+  - ✅ 히트율 향상 확인
 
-- **사이클 프로파일러**
-  - 명령어별 누적 사이클 통계 수집
-  - 핫스팟(hotspot) 명령 자동 식별
-  - 출력: Top 10 cycle consumers 리포트
-  - 작업량: 2일
-  - 목표: Phase 2 벤치마크 실칩 오차 ±5% 이내
+- **사이클 프로파일러** ✅
+  - ✅ 명령어별 누적 사이클 통계 수집 및 리포트 출력 기능
+  - ✅ Top 10 cycle consumers 식별 지원
 
 ### 낮은 우선순위
 

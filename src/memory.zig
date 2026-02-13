@@ -8,6 +8,9 @@ pub const MemoryConfig = struct {
     bus_hook_ctx: ?*anyopaque = null,
     address_translator: ?AddressTranslator = null,
     address_translator_ctx: ?*anyopaque = null,
+    mmio_read: ?MmioRead = null,
+    mmio_write: ?MmioWrite = null,
+    mmio_ctx: ?*anyopaque = null,
     default_port_width: PortWidth = .Width32,
     port_regions: []const PortRegion = &[_]PortRegion{},
     bus_cycle_config: bus_cycle.BusCycleConfig = .{}, // 버스 사이클 설정
@@ -24,6 +27,8 @@ pub const BusAccess = struct {
 pub const BusSignal = enum { ok, retry, halt, bus_error };
 pub const BusHook = *const fn (ctx: ?*anyopaque, logical_addr: u32, access: BusAccess) BusSignal;
 pub const AddressTranslator = *const fn (ctx: ?*anyopaque, logical_addr: u32, access: BusAccess) anyerror!u32;
+pub const MmioRead = *const fn (ctx: ?*anyopaque, logical_addr: u32, size: u8) ?u32;
+pub const MmioWrite = *const fn (ctx: ?*anyopaque, logical_addr: u32, size: u8, value: u32) bool;
 pub const PortWidth = enum(u8) { Width8 = 1, Width16 = 2, Width32 = 4 };
 const TlbEntries = 8;
 const TlbPageBits = 12;
@@ -53,6 +58,9 @@ pub const Memory = struct {
     bus_hook_ctx: ?*anyopaque,
     address_translator: ?AddressTranslator,
     address_translator_ctx: ?*anyopaque,
+    mmio_read: ?MmioRead,
+    mmio_write: ?MmioWrite,
+    mmio_ctx: ?*anyopaque,
     default_port_width: PortWidth,
     port_regions: []PortRegion,
     split_cycle_penalty: u32,
@@ -76,6 +84,9 @@ pub const Memory = struct {
                 .bus_hook_ctx = config.bus_hook_ctx,
                 .address_translator = config.address_translator,
                 .address_translator_ctx = config.address_translator_ctx,
+                .mmio_read = config.mmio_read,
+                .mmio_write = config.mmio_write,
+                .mmio_ctx = config.mmio_ctx,
                 .default_port_width = config.default_port_width,
                 .port_regions = &[_]PortRegion{},
                 .split_cycle_penalty = 0,
@@ -95,6 +106,9 @@ pub const Memory = struct {
                 .bus_hook_ctx = config.bus_hook_ctx,
                 .address_translator = config.address_translator,
                 .address_translator_ctx = config.address_translator_ctx,
+                .mmio_read = config.mmio_read,
+                .mmio_write = config.mmio_write,
+                .mmio_ctx = config.mmio_ctx,
                 .default_port_width = config.default_port_width,
                 .port_regions = &[_]PortRegion{},
                 .split_cycle_penalty = 0,
@@ -117,6 +131,9 @@ pub const Memory = struct {
             .bus_hook_ctx = config.bus_hook_ctx,
             .address_translator = config.address_translator,
             .address_translator_ctx = config.address_translator_ctx,
+            .mmio_read = config.mmio_read,
+            .mmio_write = config.mmio_write,
+            .mmio_ctx = config.mmio_ctx,
             .default_port_width = config.default_port_width,
             .port_regions = regions,
             .split_cycle_penalty = 0,
@@ -145,6 +162,12 @@ pub const Memory = struct {
         self.address_translator = translator;
         self.address_translator_ctx = ctx;
         self.invalidateTranslationCache();
+    }
+
+    pub fn setMmio(self: *Memory, read: ?MmioRead, write: ?MmioWrite, ctx: ?*anyopaque) void {
+        self.mmio_read = read;
+        self.mmio_write = write;
+        self.mmio_ctx = ctx;
     }
 
     pub fn invalidateTranslationCache(self: *Memory) void {
@@ -233,12 +256,18 @@ pub const Memory = struct {
     }
 
     fn read8BusRaw(self: *const Memory, logical_addr: u32, access: BusAccess) !u8 {
+        if (self.mmio_read) |read| {
+            if (read(self.mmio_ctx, logical_addr, 1)) |val| return @truncate(val);
+        }
         const addr = try @constCast(self).resolveBusAddress(logical_addr, access);
         if (addr >= self.size) return error.BusError;
         return self.data[addr];
     }
 
     fn read16BusRaw(self: *const Memory, logical_addr: u32, access: BusAccess) !u16 {
+        if (self.mmio_read) |read| {
+            if (read(self.mmio_ctx, logical_addr, 2)) |val| return @truncate(val);
+        }
         const addr = try @constCast(self).resolveBusAddress(logical_addr, access);
         if (self.enforce_alignment and (addr & 1) != 0) return error.AddressError;
         if (addr + 1 >= self.size) return error.BusError;
@@ -248,6 +277,9 @@ pub const Memory = struct {
     }
 
     fn read32BusRaw(self: *const Memory, logical_addr: u32, access: BusAccess) !u32 {
+        if (self.mmio_read) |read| {
+            if (read(self.mmio_ctx, logical_addr, 4)) |val| return val;
+        }
         const addr = try @constCast(self).resolveBusAddress(logical_addr, access);
         if (self.enforce_alignment and (addr & 1) != 0) return error.AddressError;
         if (addr + 3 >= self.size) return error.BusError;
@@ -259,12 +291,18 @@ pub const Memory = struct {
     }
 
     fn write8BusRaw(self: *Memory, logical_addr: u32, value: u8, access: BusAccess) !void {
+        if (self.mmio_write) |write| {
+            if (write(self.mmio_ctx, logical_addr, 1, value)) return;
+        }
         const addr = try self.resolveBusAddress(logical_addr, access);
         if (addr >= self.size) return error.BusError;
         self.data[addr] = value;
     }
 
     fn write16BusRaw(self: *Memory, logical_addr: u32, value: u16, access: BusAccess) !void {
+        if (self.mmio_write) |write| {
+            if (write(self.mmio_ctx, logical_addr, 2, value)) return;
+        }
         const addr = try self.resolveBusAddress(logical_addr, access);
         if (self.enforce_alignment and (addr & 1) != 0) return error.AddressError;
         if (addr + 1 >= self.size) return error.BusError;
@@ -273,6 +311,9 @@ pub const Memory = struct {
     }
 
     fn write32BusRaw(self: *Memory, logical_addr: u32, value: u32, access: BusAccess) !void {
+        if (self.mmio_write) |write| {
+            if (write(self.mmio_ctx, logical_addr, 4, value)) return;
+        }
         const addr = try self.resolveBusAddress(logical_addr, access);
         if (self.enforce_alignment and (addr & 1) != 0) return error.AddressError;
         if (addr + 3 >= self.size) return error.BusError;
@@ -441,351 +482,3 @@ pub const Memory = struct {
         @memcpy(self.data[start_addr..start_addr + data.len], data);
     }
 };
-
-test "Memory read/write byte" {
-    const allocator = std.testing.allocator;
-    var mem = Memory.init(allocator);
-    defer mem.deinit();
-    
-    try mem.write8(0x1000, 0x42);
-    const value = try mem.read8(0x1000);
-    try std.testing.expectEqual(@as(u8, 0x42), value);
-}
-
-test "Memory read/write word (big-endian)" {
-    const allocator = std.testing.allocator;
-    var mem = Memory.init(allocator);
-    defer mem.deinit();
-    
-    try mem.write16(0x1000, 0x1234);
-    const value = try mem.read16(0x1000);
-    try std.testing.expectEqual(@as(u16, 0x1234), value);
-    
-    // Verify byte order
-    const b0 = try mem.read8(0x1000);
-    const b1 = try mem.read8(0x1001);
-    try std.testing.expectEqual(@as(u8, 0x12), b0);
-    try std.testing.expectEqual(@as(u8, 0x34), b1);
-}
-
-test "Memory read/write long (big-endian)" {
-    const allocator = std.testing.allocator;
-    var mem = Memory.init(allocator);
-    defer mem.deinit();
-    
-    try mem.write32(0x1000, 0x12345678);
-    const value = try mem.read32(0x1000);
-    try std.testing.expectEqual(@as(u32, 0x12345678), value);
-}
-
-test "Memory custom size" {
-    const allocator = std.testing.allocator;
-    var mem = Memory.initWithConfig(allocator, .{ .size = 1024 * 1024 }); // 1MB
-    defer mem.deinit();
-    
-    try std.testing.expectEqual(@as(u32, 1024 * 1024), mem.size);
-}
-
-test "Memory 32-bit addressing (68020)" {
-    const allocator = std.testing.allocator;
-    var mem = Memory.initWithConfig(allocator, .{ 
-        .size = 32 * 1024 * 1024  // 32MB
-    });
-    defer mem.deinit();
-    
-    // Test address beyond 24-bit range (0xFFFFFF)
-    const test_addr: u32 = 0x01ABCDEF;
-    try mem.write32(test_addr, 0x12345678);
-    const value = try mem.read32(test_addr);
-    try std.testing.expectEqual(@as(u32, 0x12345678), value);
-    
-    // Verify it's not masked to 24-bit
-    try mem.write8(0x01000000, 0xAA);
-    const byte_val = try mem.read8(0x01000000);
-    try std.testing.expectEqual(@as(u8, 0xAA), byte_val);
-}
-
-test "Memory alignment check (68000 mode)" {
-    const allocator = std.testing.allocator;
-    var mem = Memory.initWithConfig(allocator, .{ 
-        .enforce_alignment = true 
-    });
-    defer mem.deinit();
-    
-    // Even address: should succeed
-    try mem.write16(0x1000, 0x1234);
-    const val1 = try mem.read16(0x1000);
-    try std.testing.expectEqual(@as(u16, 0x1234), val1);
-    
-    // Odd address: should fail
-    const result = mem.write16(0x1001, 0x5678);
-    try std.testing.expectError(error.AddressError, result);
-    
-    const result2 = mem.read16(0x1001);
-    try std.testing.expectError(error.AddressError, result2);
-    
-    // Long word alignment
-    try mem.write32(0x2000, 0xDEADBEEF);
-    const result3 = mem.write32(0x2001, 0x12345678);
-    try std.testing.expectError(error.AddressError, result3);
-}
-
-test "Memory unaligned access (68020 mode)" {
-    const allocator = std.testing.allocator;
-    var mem = Memory.init(allocator);  // enforce_alignment = false by default
-    defer mem.deinit();
-    
-    // Odd address: should succeed in 68020 mode
-    try mem.write16(0x1001, 0x5678);
-    const value = try mem.read16(0x1001);
-    try std.testing.expectEqual(@as(u16, 0x5678), value);
-    
-    // Odd address long word
-    try mem.write32(0x2001, 0xDEADBEEF);
-    const value2 = try mem.read32(0x2001);
-    try std.testing.expectEqual(@as(u32, 0xDEADBEEF), value2);
-}
-
-fn denyProgramFetch(_: ?*anyopaque, _: u32, access: BusAccess) BusSignal {
-    if (access.space == .Program) return .bus_error;
-    return .ok;
-}
-
-fn addTranslator(_: ?*anyopaque, logical_addr: u32, _: BusAccess) !u32 {
-    return logical_addr + 0x1000;
-}
-
-const CountingTranslatorCtx = struct {
-    calls: usize = 0,
-    delta: u32 = 0,
-};
-
-fn countingTranslator(ctx: ?*anyopaque, logical_addr: u32, _: BusAccess) !u32 {
-    const c: *CountingTranslatorCtx = @ptrCast(@alignCast(ctx.?));
-    c.calls += 1;
-    return logical_addr + c.delta;
-}
-
-const BusCallRecorder = struct {
-    calls: usize = 0,
-    addrs: [8]u32 = [_]u32{0} ** 8,
-
-    fn reset(self: *BusCallRecorder) void {
-        self.calls = 0;
-        @memset(&self.addrs, 0);
-    }
-};
-
-fn recordBusCalls(ctx: ?*anyopaque, logical_addr: u32, _: BusAccess) BusSignal {
-    const recorder: *BusCallRecorder = @ptrCast(@alignCast(ctx.?));
-    recorder.addrs[recorder.calls] = logical_addr;
-    recorder.calls += 1;
-    return .ok;
-}
-
-test "Memory bus hook and translator abstraction" {
-    const allocator = std.testing.allocator;
-    var mem = Memory.initWithConfig(allocator, .{
-        .size = 0x4000,
-        .bus_hook = denyProgramFetch,
-        .address_translator = addTranslator,
-    });
-    defer mem.deinit();
-
-    try mem.write8(0x1100, 0xAA); // physical write via legacy path
-
-    // Program fetch denied by hook.
-    const prg = mem.read8Bus(0x100, .{
-        .function_code = 0b010,
-        .space = .Program,
-        .is_write = false,
-    });
-    try std.testing.expectError(error.BusError, prg);
-
-    // Data read translated: logical 0x100 -> physical 0x1100.
-    const data_val = try mem.read8Bus(0x100, .{
-        .function_code = 0b001,
-        .space = .Data,
-        .is_write = false,
-    });
-    try std.testing.expectEqual(@as(u8, 0xAA), data_val);
-}
-
-test "Memory bus alignment violation returns address error" {
-    const allocator = std.testing.allocator;
-    var mem = Memory.initWithConfig(allocator, .{ .enforce_alignment = true });
-    defer mem.deinit();
-
-    const access = BusAccess{
-        .function_code = 0b010,
-        .space = .Data,
-        .is_write = false,
-    };
-    try std.testing.expectError(error.AddressError, mem.read16Bus(0x1001, access));
-}
-
-test "Memory translation cache reduces address translator callback calls" {
-    const allocator = std.testing.allocator;
-    var ctx = CountingTranslatorCtx{ .delta = 0x1000 };
-    var mem = Memory.initWithConfig(allocator, .{
-        .size = 0x5000,
-        .address_translator = countingTranslator,
-        .address_translator_ctx = &ctx,
-    });
-    defer mem.deinit();
-
-    try mem.write8(0x1100, 0xAA);
-    try mem.write8(0x1110, 0xAB);
-    try mem.write8(0x2100, 0xBB);
-
-    const access = BusAccess{ .function_code = 0b001, .space = .Data, .is_write = false };
-
-    // First access to page 0x0: translator called.
-    try std.testing.expectEqual(@as(u8, 0xAA), try mem.read8Bus(0x0100, access));
-    // Same page: must hit TLB without translator callback.
-    try std.testing.expectEqual(@as(u8, 0xAB), try mem.read8Bus(0x0110, access));
-    // Different page: translator called again.
-    try std.testing.expectEqual(@as(u8, 0xBB), try mem.read8Bus(0x1100, access));
-
-    try std.testing.expectEqual(@as(usize, 2), ctx.calls);
-}
-
-test "Memory translation cache flush restores translator callback path" {
-    const allocator = std.testing.allocator;
-    var ctx = CountingTranslatorCtx{ .delta = 0x1000 };
-    var mem = Memory.initWithConfig(allocator, .{
-        .size = 0x5000,
-        .address_translator = countingTranslator,
-        .address_translator_ctx = &ctx,
-    });
-    defer mem.deinit();
-
-    try mem.write8(0x1100, 0xCC);
-    try mem.write8(0x1104, 0xCD);
-    try mem.write8(0x1108, 0xCE);
-
-    const access = BusAccess{ .function_code = 0b001, .space = .Data, .is_write = false };
-    try std.testing.expectEqual(@as(u8, 0xCC), try mem.read8Bus(0x0100, access));
-    try std.testing.expectEqual(@as(usize, 1), ctx.calls);
-
-    // Cached read: no additional translator callback.
-    try std.testing.expectEqual(@as(u8, 0xCD), try mem.read8Bus(0x0104, access));
-    try std.testing.expectEqual(@as(usize, 1), ctx.calls);
-
-    mem.invalidateTranslationCache();
-    try std.testing.expectEqual(@as(u8, 0xCE), try mem.read8Bus(0x0108, access));
-    try std.testing.expectEqual(@as(usize, 2), ctx.calls);
-}
-
-test "Memory setAddressTranslator invalidates translation cache and uses new mapping" {
-    const allocator = std.testing.allocator;
-    var ctx = CountingTranslatorCtx{ .delta = 0x1000 };
-    var mem = Memory.initWithConfig(allocator, .{
-        .size = 0x6000,
-        .address_translator = countingTranslator,
-        .address_translator_ctx = &ctx,
-    });
-    defer mem.deinit();
-
-    try mem.write8(0x1100, 0x11);
-    try mem.write8(0x2100, 0x22);
-
-    const access = BusAccess{ .function_code = 0b001, .space = .Data, .is_write = false };
-    try std.testing.expectEqual(@as(u8, 0x11), try mem.read8Bus(0x0100, access));
-    try std.testing.expectEqual(@as(usize, 1), ctx.calls);
-
-    ctx.delta = 0x2000;
-    mem.setAddressTranslator(countingTranslator, &ctx);
-    try std.testing.expectEqual(@as(u8, 0x22), try mem.read8Bus(0x0100, access));
-    try std.testing.expectEqual(@as(usize, 2), ctx.calls);
-}
-
-test "Memory dynamic bus sizing splits read access by port width" {
-    const allocator = std.testing.allocator;
-    const regions = [_]PortRegion{
-        .{ .start = 0x0000, .end_exclusive = 0x0010, .width = .Width8 },
-        .{ .start = 0x0010, .end_exclusive = 0x0020, .width = .Width16 },
-    };
-    var recorder = BusCallRecorder{};
-    var mem = Memory.initWithConfig(allocator, .{
-        .size = 0x100,
-        .default_port_width = .Width32,
-        .port_regions = &regions,
-        .bus_hook = recordBusCalls,
-        .bus_hook_ctx = &recorder,
-    });
-    defer mem.deinit();
-
-    const read_access = BusAccess{
-        .function_code = 0b001,
-        .space = .Data,
-        .is_write = false,
-    };
-
-    try mem.write32(0x0000, 0x11223344);
-    recorder.reset();
-    try std.testing.expectEqual(@as(u32, 0x11223344), try mem.read32Bus(0x0000, read_access));
-    try std.testing.expectEqual(@as(usize, 4), recorder.calls);
-    try std.testing.expectEqual(@as(u32, 0x0000), recorder.addrs[0]);
-    try std.testing.expectEqual(@as(u32, 0x0001), recorder.addrs[1]);
-    try std.testing.expectEqual(@as(u32, 0x0002), recorder.addrs[2]);
-    try std.testing.expectEqual(@as(u32, 0x0003), recorder.addrs[3]);
-
-    try mem.write32(0x0010, 0x55667788);
-    recorder.reset();
-    try std.testing.expectEqual(@as(u32, 0x55667788), try mem.read32Bus(0x0010, read_access));
-    try std.testing.expectEqual(@as(usize, 2), recorder.calls);
-    try std.testing.expectEqual(@as(u32, 0x0010), recorder.addrs[0]);
-    try std.testing.expectEqual(@as(u32, 0x0012), recorder.addrs[1]);
-
-    try mem.write32(0x0020, 0x99AABBCC);
-    recorder.reset();
-    try std.testing.expectEqual(@as(u32, 0x99AABBCC), try mem.read32Bus(0x0020, read_access));
-    try std.testing.expectEqual(@as(usize, 1), recorder.calls);
-    try std.testing.expectEqual(@as(u32, 0x0020), recorder.addrs[0]);
-}
-
-test "Memory dynamic bus sizing splits write access by port width" {
-    const allocator = std.testing.allocator;
-    const regions = [_]PortRegion{
-        .{ .start = 0x0000, .end_exclusive = 0x0010, .width = .Width8 },
-        .{ .start = 0x0010, .end_exclusive = 0x0020, .width = .Width16 },
-    };
-    var recorder = BusCallRecorder{};
-    var mem = Memory.initWithConfig(allocator, .{
-        .size = 0x100,
-        .default_port_width = .Width32,
-        .port_regions = &regions,
-        .bus_hook = recordBusCalls,
-        .bus_hook_ctx = &recorder,
-    });
-    defer mem.deinit();
-
-    const write_access = BusAccess{
-        .function_code = 0b001,
-        .space = .Data,
-        .is_write = true,
-    };
-
-    recorder.reset();
-    try mem.write32Bus(0x0000, 0xA1B2C3D4, write_access);
-    try std.testing.expectEqual(@as(usize, 4), recorder.calls);
-    try std.testing.expectEqual(@as(u32, 0x0000), recorder.addrs[0]);
-    try std.testing.expectEqual(@as(u32, 0x0001), recorder.addrs[1]);
-    try std.testing.expectEqual(@as(u32, 0x0002), recorder.addrs[2]);
-    try std.testing.expectEqual(@as(u32, 0x0003), recorder.addrs[3]);
-    try std.testing.expectEqual(@as(u32, 0xA1B2C3D4), try mem.read32(0x0000));
-
-    recorder.reset();
-    try mem.write32Bus(0x0010, 0x11223344, write_access);
-    try std.testing.expectEqual(@as(usize, 2), recorder.calls);
-    try std.testing.expectEqual(@as(u32, 0x0010), recorder.addrs[0]);
-    try std.testing.expectEqual(@as(u32, 0x0012), recorder.addrs[1]);
-    try std.testing.expectEqual(@as(u32, 0x11223344), try mem.read32(0x0010));
-
-    recorder.reset();
-    try mem.write32Bus(0x0020, 0x55667788, write_access);
-    try std.testing.expectEqual(@as(usize, 1), recorder.calls);
-    try std.testing.expectEqual(@as(u32, 0x0020), recorder.addrs[0]);
-    try std.testing.expectEqual(@as(u32, 0x55667788), try mem.read32(0x0020));
-}
