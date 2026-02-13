@@ -51,3 +51,6 @@
 
 - `bus-cycle-precision-roadmap.md`
   버스 타이밍 및 사이클 정확도 향상을 위한 단계별 로드맵
+
+- `timing-regression-guide.md`
+  타이밍 회귀 테스트 자동화 가이드 (JSON 벡터 형식)

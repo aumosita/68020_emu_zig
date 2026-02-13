@@ -118,3 +118,8 @@ test "external validation vector subset runner" {
     try runSubsetDirectory(std.testing.allocator, "external_vectors/subset");
 }
 
+// TODO: timing 벡터 추가 예정
+// test "external timing validation vectors" {
+//     try runSubsetDirectory(std.testing.allocator, "external_vectors/timing");
+// }
+
