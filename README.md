@@ -50,29 +50,43 @@ zig build test
 
 ```bash
 zig test src/root.zig
-zig test src/cpu.zig
-```
-
-PATH에 Zig가 없으면 로컬 경로를 사용하세요:
-
-```bash
-../zig-macos-aarch64-0.13.0/zig test src/root.zig
 ```
 
 ## 저장소 구조
 
 ```text
 src/
-  cpu.zig        CPU 상태, 예외/인터럽트, step 루프
-  decoder.zig    opcode/EA 디코딩
-  executor.zig   명령어 실행 의미론
-  memory.zig     메모리 모델
-  root.zig       Zig/C API 표면
+  root.zig           Zig/C API 표면, 모듈 re-export
+  core/
+    cpu.zig          CPU 상태, 예외/인터럽트, step 루프
+    decoder.zig      opcode/EA 디코딩
+    executor.zig     명령어 실행 의미론
+    memory.zig       메모리 모델 (bus-path 통합)
+    exception.zig    예외 프레임 생성
+    ea_cycles.zig    EA 모드별 사이클 테이블
+    bus_cycle.zig    버스 사이클 상태 머신
+    scheduler.zig    이벤트 스케줄러 (Priority Queue)
+    interrupt.zig    인터럽트 컨트롤러
+    registers.zig    제어 레지스터 (MOVEC)
+    external_vectors.zig  JSON 검증 벡터 러너
+    cpu_test.zig     CPU 단위 테스트
+  hw/
+    via6522.zig      VIA 6522 타이머/인터럽트
+    rbv.zig          RBV (RAM-Based Video) 컨트롤러
+    video.zig        비디오/VRAM
+    scsi.zig         NCR 5380 SCSI
+    adb.zig          Apple Desktop Bus
+    scc.zig          Zilog 8530 SCC
+    iwm.zig          IWM/SWIM 플로피
+    rtc.zig          실시간 클럭/PRAM
+  systems/
+    mac_lc.zig       Mac LC 시스템 통합 (메모리 맵, MMIO)
 
-docs/
-  README.md      문서 인덱스
-  instruction-set.md
-  68020-reference.md
+tests/
+  core/              하드웨어 모듈 단위 테스트
+  integration/       시스템 통합 테스트 (인터럽트, 메모리 맵, ROM 부트)
+
+docs/                기술 문서 (사이클 모델, 버스 정밀도 등)
 ```
 
 ## C API 요약
