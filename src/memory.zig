@@ -1,4 +1,5 @@
 const std = @import("std");
+const bus_cycle = @import("bus_cycle.zig");
 
 pub const MemoryConfig = struct {
     size: u32 = 16 * 1024 * 1024,  // Default 16MB
@@ -9,6 +10,7 @@ pub const MemoryConfig = struct {
     address_translator_ctx: ?*anyopaque = null,
     default_port_width: PortWidth = .Width32,
     port_regions: []const PortRegion = &[_]PortRegion{},
+    bus_cycle_config: bus_cycle.BusCycleConfig = .{}, // 버스 사이클 설정
 };
 
 pub const AccessSpace = enum { Program, Data };
@@ -55,6 +57,8 @@ pub const Memory = struct {
     port_regions: []PortRegion,
     split_cycle_penalty: u32,
     tlb: [TlbEntries]TlbEntry,
+    bus_cycle_sm: bus_cycle.BusCycleStateMachine, // 버스 사이클 상태 머신
+    bus_cycle_enabled: bool, // 버스 사이클 모델링 활성화 여부
     allocator: std.mem.Allocator,
     
     pub fn init(allocator: std.mem.Allocator) Memory {
@@ -76,6 +80,8 @@ pub const Memory = struct {
                 .port_regions = &[_]PortRegion{},
                 .split_cycle_penalty = 0,
                 .tlb = [_]TlbEntry{.{}} ** TlbEntries,
+                .bus_cycle_sm = bus_cycle.BusCycleStateMachine.init(config.bus_cycle_config),
+                .bus_cycle_enabled = false,
                 .allocator = allocator,
             };
         };
@@ -93,6 +99,8 @@ pub const Memory = struct {
                 .port_regions = &[_]PortRegion{},
                 .split_cycle_penalty = 0,
                 .tlb = [_]TlbEntry{.{}} ** TlbEntries,
+                .bus_cycle_sm = bus_cycle.BusCycleStateMachine.init(config.bus_cycle_config),
+                .bus_cycle_enabled = false,
                 .allocator = allocator,
             };
         };
@@ -113,7 +121,9 @@ pub const Memory = struct {
             .port_regions = regions,
             .split_cycle_penalty = 0,
             .tlb = [_]TlbEntry{.{}} ** TlbEntries,
-            .allocator = allocator,
+            .bus_cycle_sm = bus_cycle.BusCycleStateMachine.init(config.bus_cycle_config),
+                .bus_cycle_enabled = false,
+                .allocator = allocator,
         };
     }
     
@@ -141,6 +151,21 @@ pub const Memory = struct {
         for (&self.tlb) |*entry| {
             entry.* = .{};
         }
+    }
+
+    /// 버스 사이클 모델링 활성화/비활성화
+    pub fn setBusCycleEnabled(self: *Memory, enabled: bool) void {
+        self.bus_cycle_enabled = enabled;
+    }
+
+    /// 버스 사이클 통계 조회
+    pub fn getBusCycleStats(self: *const Memory) struct { total_wait_cycles: u32 } {
+        return .{ .total_wait_cycles = self.bus_cycle_sm.getTotalWaitCycles() };
+    }
+
+    /// 버스 사이클 통계 초기화
+    pub fn resetBusCycleStats(self: *Memory) void {
+        self.bus_cycle_sm.resetStats();
     }
 
     fn tlbLookup(self: *const Memory, logical_addr: u32, access: BusAccess) ?u32 {

@@ -54,3 +54,6 @@
 
 - `timing-regression-guide.md`
   타이밍 회귀 테스트 자동화 가이드 (JSON 벡터 형식)
+
+- `bus-cycle-state-machine.md`
+  버스 사이클 상태 머신 (S0-S3) 및 wait state 모델링
