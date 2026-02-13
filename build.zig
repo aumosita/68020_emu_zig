@@ -249,6 +249,13 @@ pub fn build(b: *std.Build) void {
     });
     const run_external_vector_tests = b.addRunArtifact(external_vector_tests);
 
+    const scheduler_unit_tests = b.addTest(.{
+        .root_source_file = b.path("src/core/scheduler.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const run_scheduler_unit_tests = b.addRunArtifact(scheduler_unit_tests);
+
     const mac_lc_tests = b.addTest(.{
         .root_source_file = b.path("tests/integration/mac_lc.zig"),
         .target = target,
@@ -265,10 +272,20 @@ pub fn build(b: *std.Build) void {
     interrupts_tests.root_module.addImport("m68020", &lib.root_module);
     const run_interrupts_tests = b.addRunArtifact(interrupts_tests);
 
+    const video_timing_tests = b.addTest(.{
+        .root_source_file = b.path("tests/integration/video_timing.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    video_timing_tests.root_module.addImport("m68020", &lib.root_module);
+    const run_video_timing_tests = b.addRunArtifact(video_timing_tests);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_exe_unit_tests.step);
     test_step.dependOn(&run_external_vector_tests.step);
+    test_step.dependOn(&run_scheduler_unit_tests.step);
     test_step.dependOn(&run_mac_lc_tests.step);
     test_step.dependOn(&run_interrupts_tests.step);
+    test_step.dependOn(&run_video_timing_tests.step);
 }

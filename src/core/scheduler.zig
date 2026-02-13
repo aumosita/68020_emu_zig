@@ -1,74 +1,126 @@
 const std = @import("std");
+const PriorityQueue = std.PriorityQueue;
 
-/// A prioritized event in the emulator timeline.
+pub const EventCallback = *const fn (context: *anyopaque, time: u64) void;
+
 pub const Event = struct {
-    callback: *const fn (ctx: ?*anyopaque, current_cycles: u64) void,
-    ctx: ?*anyopaque,
-    target_cycles: u64,
-    description: []const u8 = "unknown",
+    time: u64,
+    id: u64, // Unique ID to help with cancellation or stable sorting if needed
+    callback: EventCallback,
+    context: *anyopaque,
 };
 
-/// Central Event Scheduler for cycle-accurate timing.
-/// Uses a simple sorted list for event management.
+fn compareEvents(context: void, a: Event, b: Event) std.math.Order {
+    _ = context;
+    if (a.time < b.time) return .lt;
+    if (a.time > b.time) return .gt;
+    // Tie-breaker: use ID to maintain FIFO for same-time events
+    if (a.id < b.id) return .lt;
+    if (a.id > b.id) return .gt;
+    return .eq;
+}
+
 pub const Scheduler = struct {
-    events: std.ArrayList(Event),
-    current_cycles: u64 = 0,
+    queue: PriorityQueue(Event, void, compareEvents),
+    current_time: u64,
+    next_id: u64,
+    allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) Scheduler {
         return .{
-            .events = std.ArrayList(Event).init(allocator),
-            .current_cycles = 0,
+            .queue = PriorityQueue(Event, void, compareEvents).init(allocator, {}),
+            .current_time = 0,
+            .next_id = 0,
+            .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *Scheduler) void {
-        self.events.deinit();
+        self.queue.deinit();
     }
 
-    /// Schedule a new event at relative 'delay' cycles from now.
-    pub fn schedule(self: *Scheduler, delay: u64, callback: *const fn (ctx: ?*anyopaque, cycles: u64) void, ctx: ?*anyopaque, desc: []const u8) !void {
-        const target = self.current_cycles + delay;
-        const new_event = Event{
+    pub fn schedule(self: *Scheduler, time: u64, context: *anyopaque, callback: EventCallback) !u64 {
+        const id = self.next_id;
+        self.next_id += 1;
+        try self.queue.add(.{
+            .time = time,
+            .id = id,
             .callback = callback,
-            .ctx = ctx,
-            .target_cycles = target,
-            .description = desc,
-        };
-
-        // Find insertion point to keep events sorted by target_cycles
-        var insert_idx: usize = 0;
-        for (self.events.items, 0..) |event, i| {
-            if (event.target_cycles > target) {
-                insert_idx = i;
-                break;
-            }
-            insert_idx = i + 1;
-        }
-
-        try self.events.insert(insert_idx, new_event);
+            .context = context,
+        });
+        return id;
     }
 
-    /// Advance time and run all expired events.
-    pub fn tick(self: *Scheduler, delta_cycles: u32) void {
-        self.current_cycles += delta_cycles;
-        
-        while (self.events.items.len > 0) {
-            const next_event = self.events.items[0];
-            if (next_event.target_cycles <= self.current_cycles) {
-                // Remove first and call
-                _ = self.events.orderedRemove(0);
-                next_event.callback(next_event.ctx, self.current_cycles);
-            } else {
-                break;
-            }
+    pub fn nextEventTime(self: *Scheduler) ?u64 {
+        const top = self.queue.peek();
+        if (top) |event| {
+            return event.time;
         }
+        return null;
     }
 
-    /// Get cycles until the next event fires.
-    pub fn cyclesToNextEvent(self: *const Scheduler) ?u64 {
-        if (self.events.items.len == 0) return null;
-        const target = self.events.items[0].target_cycles;
-        if (target <= self.current_cycles) return 0;
-        return target - self.current_cycles;
+    /// Run events up to and including `end_time`
+    pub fn runUntil(self: *Scheduler, end_time: u64) void {
+        while (self.queue.peek()) |event| {
+            if (event.time > end_time) break;
+
+            // Remove event
+            const current = self.queue.remove();
+
+            // Update current time to event time (optional, but good for causality)
+            self.current_time = current.time;
+
+            // Execute
+            current.callback(current.context, current.time);
+        }
+        self.current_time = end_time;
+    }
+
+    pub fn reset(self: *Scheduler) void {
+        // Clear queue
+        while (self.queue.removeOrNull()) |_| {}
+        self.current_time = 0;
+        self.next_id = 0;
     }
 };
+
+const Context = struct {
+    executed: bool = false,
+    exec_time: u64 = 0,
+
+    fn callback(ctx: *anyopaque, time: u64) void {
+        var self: *Context = @ptrCast(@alignCast(ctx));
+        self.executed = true;
+        self.exec_time = time;
+    }
+};
+
+test "Scheduler Verification" {
+    const testing = std.testing;
+
+    var scheduler = Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    var ctx1 = Context{};
+    var ctx2 = Context{};
+
+    // Schedule out of order
+    _ = try scheduler.schedule(200, &ctx2, Context.callback);
+    _ = try scheduler.schedule(100, &ctx1, Context.callback);
+
+    // Run to 50 (nothing should happen)
+    scheduler.runUntil(50);
+    try testing.expectEqual(false, ctx1.executed);
+    try testing.expectEqual(false, ctx2.executed);
+
+    // Run to 150 (ctx1 should execute)
+    scheduler.runUntil(150);
+    try testing.expectEqual(true, ctx1.executed);
+    try testing.expectEqual(100, ctx1.exec_time);
+    try testing.expectEqual(false, ctx2.executed); // ctx2 still pending
+
+    // Run to 250 (ctx2 should execute)
+    scheduler.runUntil(250);
+    try testing.expectEqual(true, ctx2.executed);
+    try testing.expectEqual(200, ctx2.exec_time);
+}
