@@ -195,8 +195,9 @@ pub const MacLcSystem = struct {
     //  MMIO Read
     // ────────────────────────────────────────────
 
-    pub fn mmioRead(context: ?*anyopaque, addr: u32, size: u8) ?u32 {
+    pub fn mmioRead(context: ?*anyopaque, addr_raw: u32, size: u8) ?u32 {
         var self: *MacLcSystem = @ptrCast(@alignCast(context orelse return null));
+        const addr = if (!self.address_mode_32) addr_raw & 0x00FFFFFF else addr_raw;
 
         // ── ROM Overlay: ROM at 0x000000 during boot ──
         if (self.rom_overlay) {
@@ -269,9 +270,8 @@ pub const MacLcSystem = struct {
             return self.readRom(offset, size);
         }
 
-        // ROM mirror (0xF00000-0xFFFFFF)
+        // ROM mirror (0xF00000-0xFFFFFF) — does NOT disable overlay
         if (addr >= ROM_MIRROR_BASE_24 and addr <= ROM_MIRROR_END_24) {
-            self.rom_overlay = false;
             const offset = addr - ROM_MIRROR_BASE_24;
             return self.readRom(offset, size);
         }
@@ -309,8 +309,9 @@ pub const MacLcSystem = struct {
     //  MMIO Write
     // ────────────────────────────────────────────
 
-    pub fn mmioWrite(context: ?*anyopaque, addr: u32, size: u8, value: u32) bool {
+    pub fn mmioWrite(context: ?*anyopaque, addr_raw: u32, size: u8, value: u32) bool {
         var self: *MacLcSystem = @ptrCast(@alignCast(context orelse return false));
+        const addr = if (!self.address_mode_32) addr_raw & 0x00FFFFFF else addr_raw;
 
         // ── ROM Overlay write: writing to overlaid area goes to RAM ──
         if (self.rom_overlay and addr < self.rom_size) {
@@ -383,12 +384,14 @@ pub const MacLcSystem = struct {
     fn mmioWrite24bit(self: *MacLcSystem, addr: u32, val8: u8, value: u32) bool {
         _ = value;
 
-        // ROM writes are ignored (read-only)
-        if ((addr >= ROM_BASE_24 and addr <= ROM_END_24) or
-            (addr >= ROM_MIRROR_BASE_24 and addr <= ROM_MIRROR_END_24))
-        {
+        // ROM area — disable overlay only for primary ROM range
+        if (addr >= ROM_BASE_24 and addr <= ROM_END_24) {
             self.rom_overlay = false;
-            return true; // Absorbed, ignored
+            return true; // ROM is read-only — absorbed
+        }
+        // ROM mirror writes — do NOT disable overlay
+        if (addr >= ROM_MIRROR_BASE_24 and addr <= ROM_MIRROR_END_24) {
+            return true; // ROM is read-only — absorbed
         }
 
         // VIA1

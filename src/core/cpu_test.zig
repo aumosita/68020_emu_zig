@@ -499,7 +499,7 @@ test "M68k decode extension fetch bus error preserves faulting address in format
     defer m68k.deinit();
 
     try m68k.memory.write32(m68k.getExceptionVector(2), 0x0F00);
-    try m68k.memory.write16(0x0FFE, 0x3005); // decode consumes extension word at 0x1000
+    try m68k.memory.write16(0x0FFE, 0x3028); // MOVE.W (d16,A0),D0 — decode reads extension word at 0x1000
     m68k.pc = 0x0FFE;
     m68k.a[7] = 0x0700;
     m68k.setSR(0x2000);

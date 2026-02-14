@@ -1,59 +1,20 @@
 # 문서 인덱스
 
-이 디렉터리는 현재 코드베이스 기준의 활성 기술 문서를 모아둔 곳입니다.
+68020_emu_zig 프로젝트 기술 문서.
 
 ## 문서 목록
 
-- `68020-reference.md`
-  68020 아키텍처, 예외/인터럽트, 레지스터 동작, 구현 메모
+| 문서 | 내용 |
+|------|------|
+| [architecture.md](architecture.md) | 전체 아키텍처, 모듈 구조, 데이터 흐름 |
+| [instruction-set.md](instruction-set.md) | 명령어 세트 구현 현황 (97/105, 92%) |
+| [internals.md](internals.md) | SP 모델, 에러 처리, MOVEC, 코프로세서 |
+| [timing-and-bus.md](timing-and-bus.md) | 사이클 모델, 버스, 캐시, 프로파일러 |
+| [guides.md](guides.md) | 테스트, 벤치마크, 플랫폼, Python 연동 |
 
-- `instruction-set.md`
-  명령어 분류, 디코더/실행기 기준 동작 요약
+## 빠른 시작
 
-- `68000_vs_68020.md`
-  68000 대비 68020 차이점 요약
-
-- `testing-guide.md`
-  테스트 전략, 회귀 테스트 작성 및 실행 가이드
-
-- `MOVEC_GUIDE.md`
-  `MOVEC` 및 제어 레지스터 처리 규칙
-
-- `python-examples.md`
-  외부 연동 시 API 사용 예시
-
-- `LAYERING_CRITERIA.md`
-  파일 계층화/책임 분리 기준
-
-- `cycle-model.md`
-  사이클 정책(고정/검증됨 vs 근사)과 회귀 기준
-
-- `coprocessor-handler.md`
-  코프로세서 핸들러 계약(handled/unavailable/fault)과 회귀 기준
-
-- `pmmu-ready.md`
-  PMMU-ready 최소 호환 레이어(옵션 플래그, 현재 범위, 확장 계획)
-
-- `cache-pipeline-options.md`
-  I-cache 통계/penalty 옵션 및 파이프라인 모드 플래그 정책
-
-- `translation-cache.md`
-  address_translator 경로용 소프트웨어 TLB 설계/무효화/검증 포인트
-
-- `platform-layer.md`
-  CPU 외부 PIC/timer/UART stub 설계와 IRQ 주입 경계 계약
-
-- `benchmark-guide.md`
-  3개 대표 워크로드 기반 성능 측정 절차와 기준 수치
-
-- `external-vector-runner.md`
-  JSON 기반 외부 검증 벡터 로더/subset/CI 연동 가이드
-
-- `bus-cycle-precision-roadmap.md`
-  버스 타이밍 및 사이클 정확도 향상을 위한 단계별 로드맵
-
-- `timing-regression-guide.md`
-  타이밍 회귀 테스트 자동화 가이드 (JSON 벡터 형식)
-
-- `bus-cycle-state-machine.md`
-  버스 사이클 상태 머신 (S0-S3) 및 wait state 모델링
+```bash
+zig build test --summary all    # 전체 테스트 실행
+zig build run                   # 에뮬레이터 실행
+```

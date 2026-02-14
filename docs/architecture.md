@@ -309,29 +309,12 @@ zig build test         # Run all tests
 zig test src/core/cpu.zig   # Run specific module tests
 ```
 
-## Documentation Structure
-
-```
-docs/
-├── README.md                    # Documentation index
-├── architecture.md              # This file
-├── error-handling.md            # Error handling guide
-├── instruction-set.md           # Instruction reference
-├── 68020-reference.md           # 68020 specifics
-├── testing-guide.md             # Testing procedures
-├── cycle-model.md               # Cycle accuracy policy
-├── bus-cycle-state-machine.md   # Bus protocol details
-├── platform-layer.md            # Platform abstraction
-└── ...
-```
-
 ## Further Reading
 
-- [Instruction Set](instruction-set.md) - Detailed instruction documentation
-- [Error Handling](error-handling.md) - Error types and C API mapping
-- [Testing Guide](testing-guide.md) - How to write and run tests
-- [Cycle Model](cycle-model.md) - Cycle accuracy policy
-- [Bus Cycle State Machine](bus-cycle-state-machine.md) - Memory access timing
+- [Instruction Set](instruction-set.md) — 구현 현황 및 분류
+- [CPU Internals](internals.md) — SP 모델, 에러, MOVEC
+- [Timing & Bus](timing-and-bus.md) — 사이클, 캐시, 버스
+- [Guides](guides.md) — 테스트, 벤치마크, Python 연동
 
 ---
 

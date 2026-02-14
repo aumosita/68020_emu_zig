@@ -1,38 +1,44 @@
-# 명령어 세트 개요
+# 68020 명령어 세트 구현 현황
 
-이 문서는 현재 구현된 명령군을 실무 관점에서 요약합니다.
+**구현률**: 97/105 (92.4%) — PMMU 8개 제외 시 100%  
+**테스트**: 216개 / 통과율 100%  
+**최종 업데이트**: 2026-02-14
 
-## 기본 명령군
+## 구현된 명령어 (97개)
 
-- 데이터 이동: `MOVE`, `MOVEA`, `MOVEQ`, `MOVEM`, `MOVEP`, `LEA`, `PEA`, `EXG`, `SWAP`
-- 산술/비교: `ADD*`, `SUB*`, `MUL*`, `DIV*`, `CMP*`, `CHK`, `TST`, `NEG*`, `CLR`, `EXT/EXTB`
-- 논리/비트: `AND*`, `OR*`, `EOR*`, `NOT`, `BTST/BSET/BCLR/BCHG`
-- 시프트/회전: `AS*`, `LS*`, `RO*`, `ROX*`
-- 흐름 제어: `BRA`, `BSR`, `Bcc`, `DBcc`, `Scc`, `JMP`, `JSR`, `RTS`, `RTR`, `RTE`, `RTD`
-- 예외/시스템: `TRAP`, `TRAPV`, `ILLEGAL`, `RESET`, `STOP`, `BKPT`, `TRAPcc`
+| 카테고리 | 명령어 | 개수 |
+|----------|--------|------|
+| 데이터 이동 | MOVE, MOVEA, MOVEQ, MOVEM, MOVEP, MOVEC, MOVES, MOVE USP, LEA, PEA, LINK, UNLK, EXG, SWAP, EXT/EXTB | 15 |
+| 산술 | ADD/A/I/Q/X, SUB/A/I/Q/X, NEG/X, CLR, CMP/A/I/M, CMP2, TST | 22 |
+| 곱셈/나눗셈 | MULU/S (16×16), MULU/S.L (32×32), DIVU/S (32÷16), DIVU/S.L (64÷32) | 8 |
+| 논리 | AND/I, OR/I, EOR/I, NOT (+CCR/SR variants) | 7 |
+| 시프트/로테이트 | ASL/R, LSL/R, ROL/R, ROXL/R | 8 |
+| 비트 조작 | BTST, BSET, BCLR, BCHG | 4 |
+| 비트 필드 (68020) | BFTST, BFSET, BFCLR, BFCHG, BFEXTS, BFEXTU, BFINS, BFFFO | 8 |
+| BCD | ABCD, SBCD, NBCD, PACK, UNPK | 5 |
+| 분기/점프 | BRA, Bcc, BSR, DBcc, Scc, JMP, JSR | 7 |
+| 복귀 | RTS, RTR, RTE, RTD | 4 |
+| 예외 | TRAP, TRAPV, TRAPcc, CHK, CHK2 | 5 |
+| 시스템 제어 | RESET, STOP, NOP, ILLEGAL, TAS, BKPT | 6 |
+| 멀티프로세서 (68020) | CAS, CAS2 | 2 |
+| 모듈 (68020) | CALLM, RTM | 2 |
+| 에뮬레이션 | Line-A, Line-F (COPROC) | 2 |
 
-## 68020 확장 중심
+## 미구현 명령어 (8개) — PMMU (68851)
 
-- 비트필드: `BFTST`, `BFEXTU`, `BFEXTS`, `BFSET`, `BFCLR`, `BFCHG`, `BFINS`, `BFFFO`
-- 원자 연산: `CAS`, `CAS2`
-- 모듈/범위/BCD 확장: `CALLM`, `RTM`, `CHK2`, `CMP2`, `PACK`, `UNPK`
-- 확장 산술: `MULS.L`, `MULU.L`, `DIVS.L`, `DIVU.L`
-- 제어 레지스터: `MOVEC`
+PTEST, PLOAD, PFLUSH, PMOVE, PBcc, PDBcc, PScc, PTRAPcc
 
-## 주의 사항
+- Mac LC는 PMMU 미사용 (24-bit 주소 모드)
+- System 6/7 부팅에 불필요
+- A/UX 지원 시 구현 예정
 
-- 일부 명령의 사이클은 근사 모델일 수 있어 향후 보정 대상입니다.
-- FPU 명령은 실행하지 않으며 코프로세서 예외 경로로 처리합니다.
+## 사이클 표기
 
-## 사이클 표기 규칙
+- **정확**: 테스트로 검증된 값
+- **근사**: 확장 명령어, 복합 EA, 예외 프레임 경로 등
 
-이 프로젝트 문맥에서 사이클 표기는 아래 기준을 따릅니다.
+## 코드 위치
 
-- `정확`: 현재 테스트로 고정된 동작/분기 조건을 포함해 검증된 값
-- `근사`: 구현 단순화를 위해 실칩 내부 타이밍을 추상화한 값
-
-특히 아래 그룹은 `근사` 가능성이 상대적으로 높습니다.
-
-- 확장 명령(`MUL*.L`, `DIV*.L`, `CALLM/RTM`, 비트필드 계열)
-- 복합 EA가 포함된 메모리 명령
-- 예외 프레임 포맷별 특수 경로
+- 디코딩: `src/core/decoder.zig`
+- 실행: `src/core/executor.zig`
+- 테스트: `src/core/cpu_test.zig`

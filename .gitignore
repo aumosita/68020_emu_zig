@@ -32,3 +32,4 @@ rom_and_bin/
 output*.txt
 test_out.txt
 build_out_*.txt
+.zig-global-cache/
