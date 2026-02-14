@@ -1,6 +1,6 @@
 const std = @import("std");
-const ea_cycles = @import("ea_cycles.zig");
-const decoder = @import("decoder.zig");
+const ea_cycles = @import("../../src/core/ea_cycles.zig");
+const decoder = @import("../../src/core/decoder.zig");
 
 test "EA cycles: Dn (데이터 레지스터 직접)" {
     const op = decoder.Operand{ .DataReg = 0 };

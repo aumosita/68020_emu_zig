@@ -14,6 +14,9 @@ Zig로 작성된 Motorola 68000/68020 CPU 에뮬레이터 코어입니다. 디�
 - 버스 추상화 계층(`bus hook`, 주소 변환기)을 추가해 PMMU/외부 버스 컨트롤러 연동 지점을 제공했습니다.
 - PIC/timer/UART stub 기반의 플랫폼 레이어와 주기 IRQ 데모 루프를 제공합니다.
 - 명령어 fetch 단계 버스 에러 시 Format A 프레임(vector 2) 생성 경로를 반영했습니다.
+- **테스트 구조 개선**: `tests/` 디렉토리로 테스트 파일을 분리하고, 단위 테스트(`tests/core`)와 시스템 통합 테스트(`tests/integration`)를 체계화했습니다.
+- **인터럽트 검증 강화**: VIA/RBV에서 CPU로 이어지는 하드웨어 인터럽트 전파 및 중첩 인터럽트 처리 로직을 검증했습니다.
+- **이벤트 스케줄러 도입**: 중앙 집중식 우선순위 큐 스케줄러(`src/core/scheduler.zig`)를 통해 타이머 및 VBL 인터럽트의 사이클 정확도를 보장합니다.
 
 ## 범위와 제한
 
@@ -47,29 +50,43 @@ zig build test
 
 ```bash
 zig test src/root.zig
-zig test src/cpu.zig
-```
-
-PATH에 Zig가 없으면 로컬 경로를 사용하세요:
-
-```bash
-../zig-macos-aarch64-0.13.0/zig test src/root.zig
 ```
 
 ## 저장소 구조
 
 ```text
 src/
-  cpu.zig        CPU 상태, 예외/인터럽트, step 루프
-  decoder.zig    opcode/EA 디코딩
-  executor.zig   명령어 실행 의미론
-  memory.zig     메모리 모델
-  root.zig       Zig/C API 표면
+  root.zig           Zig/C API 표면, 모듈 re-export
+  core/
+    cpu.zig          CPU 상태, 예외/인터럽트, step 루프
+    decoder.zig      opcode/EA 디코딩
+    executor.zig     명령어 실행 의미론
+    memory.zig       메모리 모델 (bus-path 통합)
+    exception.zig    예외 프레임 생성
+    ea_cycles.zig    EA 모드별 사이클 테이블
+    bus_cycle.zig    버스 사이클 상태 머신
+    scheduler.zig    이벤트 스케줄러 (Priority Queue)
+    interrupt.zig    인터럽트 컨트롤러
+    registers.zig    제어 레지스터 (MOVEC)
+    external_vectors.zig  JSON 검증 벡터 러너
+    cpu_test.zig     CPU 단위 테스트
+  hw/
+    via6522.zig      VIA 6522 타이머/인터럽트
+    rbv.zig          RBV (RAM-Based Video) 컨트롤러
+    video.zig        비디오/VRAM
+    scsi.zig         NCR 5380 SCSI
+    adb.zig          Apple Desktop Bus
+    scc.zig          Zilog 8530 SCC
+    iwm.zig          IWM/SWIM 플로피
+    rtc.zig          실시간 클럭/PRAM
+  systems/
+    mac_lc.zig       Mac LC 시스템 통합 (메모리 맵, MMIO)
 
-docs/
-  README.md      문서 인덱스
-  instruction-set.md
-  68020-reference.md
+tests/
+  core/              하드웨어 모듈 단위 테스트
+  integration/       시스템 통합 테스트 (인터럽트, 메모리 맵, ROM 부트)
+
+docs/                기술 문서 (사이클 모델, 버스 정밀도 등)
 ```
 
 ## C API 요약

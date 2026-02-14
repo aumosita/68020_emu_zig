@@ -2,8 +2,8 @@ const std = @import("std");
 const bus_cycle = @import("bus_cycle.zig");
 
 pub const MemoryConfig = struct {
-    size: u32 = 16 * 1024 * 1024,  // Default 16MB
-    enforce_alignment: bool = false,  // true = 68000 mode, false = 68020 mode
+    size: u32 = 16 * 1024 * 1024, // Default 16MB
+    enforce_alignment: bool = false, // true = 68000 mode, false = 68020 mode
     bus_hook: ?BusHook = null,
     bus_hook_ctx: ?*anyopaque = null,
     address_translator: ?AddressTranslator = null,
@@ -53,7 +53,7 @@ pub const Memory = struct {
     // Memory data
     data: []u8,
     size: u32,
-    enforce_alignment: bool,  // 68000 compatibility mode
+    enforce_alignment: bool, // 68000 compatibility mode
     bus_hook: ?BusHook,
     bus_hook_ctx: ?*anyopaque,
     address_translator: ?AddressTranslator,
@@ -68,11 +68,11 @@ pub const Memory = struct {
     bus_cycle_sm: bus_cycle.BusCycleStateMachine, // 버스 사이클 상태 머신
     bus_cycle_enabled: bool, // 버스 사이클 모델링 활성화 여부
     allocator: std.mem.Allocator,
-    
+
     pub fn init(allocator: std.mem.Allocator) Memory {
         return initWithConfig(allocator, .{});
     }
-    
+
     pub fn initWithConfig(allocator: std.mem.Allocator, config: MemoryConfig) Memory {
         const mem_size = config.size;
         const data = allocator.alloc(u8, mem_size) catch {
@@ -119,10 +119,10 @@ pub const Memory = struct {
             };
         };
         @memcpy(regions, config.port_regions);
-        
+
         // Zero out memory
         @memset(data, 0);
-        
+
         return Memory{
             .data = data,
             .size = mem_size,
@@ -139,11 +139,11 @@ pub const Memory = struct {
             .split_cycle_penalty = 0,
             .tlb = [_]TlbEntry{.{}} ** TlbEntries,
             .bus_cycle_sm = bus_cycle.BusCycleStateMachine.init(config.bus_cycle_config),
-                .bus_cycle_enabled = false,
-                .allocator = allocator,
+            .bus_cycle_enabled = false,
+            .allocator = allocator,
         };
     }
-    
+
     pub fn deinit(self: *Memory) void {
         if (self.data.len > 0) {
             self.allocator.free(self.data);
@@ -324,10 +324,18 @@ pub const Memory = struct {
     }
 
     pub fn read8Bus(self: *const Memory, logical_addr: u32, access: BusAccess) !u8 {
+        if (self.bus_cycle_enabled) {
+            const wait = bus_cycle.calculateBusCycles(logical_addr, 1, &self.bus_cycle_sm.config);
+            if (wait > 4) @constCast(self).addSplitCyclePenalty(wait - 4);
+        }
         return self.read8BusRaw(logical_addr, access);
     }
 
     pub fn read16Bus(self: *const Memory, logical_addr: u32, access: BusAccess) !u16 {
+        if (self.bus_cycle_enabled) {
+            const wait = bus_cycle.calculateBusCycles(logical_addr, 2, &self.bus_cycle_sm.config);
+            if (wait > 4) @constCast(self).addSplitCyclePenalty(wait - 4);
+        }
         return switch (self.portWidthFor(logical_addr)) {
             .Width8 => {
                 @constCast(self).addSplitCyclePenalty(1);
@@ -340,6 +348,10 @@ pub const Memory = struct {
     }
 
     pub fn read32Bus(self: *const Memory, logical_addr: u32, access: BusAccess) !u32 {
+        if (self.bus_cycle_enabled) {
+            const wait = bus_cycle.calculateBusCycles(logical_addr, 4, &self.bus_cycle_sm.config);
+            if (wait > 4) @constCast(self).addSplitCyclePenalty(wait - 4);
+        }
         return switch (self.portWidthFor(logical_addr)) {
             .Width8 => {
                 @constCast(self).addSplitCyclePenalty(3);
@@ -360,10 +372,18 @@ pub const Memory = struct {
     }
 
     pub fn write8Bus(self: *Memory, logical_addr: u32, value: u8, access: BusAccess) !void {
+        if (self.bus_cycle_enabled) {
+            const wait = bus_cycle.calculateBusCycles(logical_addr, 1, &self.bus_cycle_sm.config);
+            if (wait > 4) self.addSplitCyclePenalty(wait - 4);
+        }
         try self.write8BusRaw(logical_addr, value, access);
     }
 
     pub fn write16Bus(self: *Memory, logical_addr: u32, value: u16, access: BusAccess) !void {
+        if (self.bus_cycle_enabled) {
+            const wait = bus_cycle.calculateBusCycles(logical_addr, 2, &self.bus_cycle_sm.config);
+            if (wait > 4) self.addSplitCyclePenalty(wait - 4);
+        }
         switch (self.portWidthFor(logical_addr)) {
             .Width8 => {
                 self.addSplitCyclePenalty(1);
@@ -375,6 +395,10 @@ pub const Memory = struct {
     }
 
     pub fn write32Bus(self: *Memory, logical_addr: u32, value: u32, access: BusAccess) !void {
+        if (self.bus_cycle_enabled) {
+            const wait = bus_cycle.calculateBusCycles(logical_addr, 4, &self.bus_cycle_sm.config);
+            if (wait > 4) self.addSplitCyclePenalty(wait - 4);
+        }
         switch (self.portWidthFor(logical_addr)) {
             .Width8 => {
                 self.addSplitCyclePenalty(3);
@@ -391,94 +415,50 @@ pub const Memory = struct {
             .Width32 => try self.write32BusRaw(logical_addr, value, access),
         }
     }
-    
+
+    // Default BusAccess for backward-compatible flat API (supervisor data space)
+    const default_access: BusAccess = .{ .function_code = 0b101, .space = .Data, .is_write = false };
+    const default_write_access: BusAccess = .{ .function_code = 0b101, .space = .Data, .is_write = true };
+
+    /// Flat API — delegates to bus-path with default supervisor data access.
+    /// Prefer read8Bus() with explicit BusAccess for new code.
     pub fn read8(self: *const Memory, addr: u32) !u8 {
-        // 68020: Full 32-bit addressing (no mask)
-        if (addr >= self.size) {
-            return error.InvalidAddress;
-        }
-        return self.data[addr];
+        return self.read8Bus(addr, default_access);
     }
-    
+
+    /// Flat API — delegates to bus-path with default supervisor data access.
     pub fn read16(self: *const Memory, addr: u32) !u16 {
-        // 68000 compatibility: check alignment
-        if (self.enforce_alignment and (addr & 1) != 0) {
-            return error.AddressError;
-        }
-        
-        // 68020: Full 32-bit addressing
-        if (addr + 1 >= self.size) {
-            return error.InvalidAddress;
-        }
-        // Big-endian (Motorola byte order)
-        const high: u16 = self.data[addr];
-        const low: u16 = self.data[addr + 1];
-        return (high << 8) | low;
+        return self.read16Bus(addr, default_access);
     }
-    
+
+    /// Flat API — delegates to bus-path with default supervisor data access.
     pub fn read32(self: *const Memory, addr: u32) !u32 {
-        // 68000 compatibility: check alignment
-        if (self.enforce_alignment and (addr & 1) != 0) {
-            return error.AddressError;
-        }
-        
-        // 68020: Full 32-bit addressing
-        if (addr + 3 >= self.size) {
-            return error.InvalidAddress;
-        }
-        // Big-endian
-        const b0: u32 = self.data[addr];
-        const b1: u32 = self.data[addr + 1];
-        const b2: u32 = self.data[addr + 2];
-        const b3: u32 = self.data[addr + 3];
-        return (b0 << 24) | (b1 << 16) | (b2 << 8) | b3;
+        return self.read32Bus(addr, default_access);
     }
-    
+
+    /// Flat API — delegates to bus-path with default supervisor write access.
+    /// Prefer write8Bus() with explicit BusAccess for new code.
     pub fn write8(self: *Memory, addr: u32, value: u8) !void {
-        // 68020: Full 32-bit addressing
-        if (addr >= self.size) {
-            return error.InvalidAddress;
-        }
-        self.data[addr] = value;
+        return self.write8Bus(addr, value, default_write_access);
     }
-    
+
+    /// Flat API — delegates to bus-path with default supervisor write access.
     pub fn write16(self: *Memory, addr: u32, value: u16) !void {
-        // 68000 compatibility: check alignment
-        if (self.enforce_alignment and (addr & 1) != 0) {
-            return error.AddressError;
-        }
-        
-        // 68020: Full 32-bit addressing
-        if (addr + 1 >= self.size) {
-            return error.InvalidAddress;
-        }
-        // Big-endian
-        self.data[addr] = @truncate(value >> 8);
-        self.data[addr + 1] = @truncate(value & 0xFF);
+        return self.write16Bus(addr, value, default_write_access);
     }
-    
+
+    /// Flat API — delegates to bus-path with default supervisor write access.
     pub fn write32(self: *Memory, addr: u32, value: u32) !void {
-        // 68000 compatibility: check alignment
-        if (self.enforce_alignment and (addr & 1) != 0) {
-            return error.AddressError;
-        }
-        
-        // 68020: Full 32-bit addressing
-        if (addr + 3 >= self.size) {
-            return error.InvalidAddress;
-        }
-        // Big-endian
-        self.data[addr] = @truncate(value >> 24);
-        self.data[addr + 1] = @truncate((value >> 16) & 0xFF);
-        self.data[addr + 2] = @truncate((value >> 8) & 0xFF);
-        self.data[addr + 3] = @truncate(value & 0xFF);
+        return self.write32Bus(addr, value, default_write_access);
     }
-    
+
+    /// Direct binary load into data[] array. Used for initial program/ROM loading
+    /// before MMIO hooks are configured. Does NOT go through bus path.
     pub fn loadBinary(self: *Memory, data: []const u8, start_addr: u32) !void {
         // 68020: Full 32-bit addressing
         if (start_addr + data.len > self.size) {
             return error.InvalidAddress;
         }
-        @memcpy(self.data[start_addr..start_addr + data.len], data);
+        @memcpy(self.data[start_addr .. start_addr + data.len], data);
     }
 };

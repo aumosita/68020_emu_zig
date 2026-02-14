@@ -26,6 +26,7 @@ const BusHookTestContext = struct {
     saw_program_fetch: bool = false,
     last_addr: u32 = 0,
     last_access: memory.BusAccess = .{},
+    error_target_addr: ?u32 = null, // Only trigger bus_error for this specific address
 };
 
 const BkptTestContext = struct {
@@ -73,7 +74,8 @@ fn busHookTestHandler(ctx: ?*anyopaque, logical_addr: u32, access: memory.BusAcc
             break :blk .ok;
         },
         .halt_program_fetch => if (access.space == .Program and !access.is_write) .halt else .ok,
-        .bus_error_on_data_write => if (access.space == .Data and access.is_write) .bus_error else .ok,
+        .bus_error_on_data_write => if (access.space == .Data and access.is_write and
+            (typed.error_target_addr == null or typed.error_target_addr.? == logical_addr)) .bus_error else .ok,
         .capture_program_fetch => .ok,
     };
 }
@@ -565,36 +567,36 @@ test "M68k CMPM - Compare Memory with Post-Increment" {
     const allocator = std.testing.allocator;
     var m68k = M68k.init(allocator);
     defer m68k.deinit();
-    
+
     // Test CMPM.L (Ay)+,(Ax)+
     // Setup: A0 points to value 0x12345678, A1 points to value 0x12345678 (equal)
     m68k.a[0] = 0x1000;
     m68k.a[1] = 0x2000;
     try m68k.memory.write32(0x1000, 0x12345678);
     try m68k.memory.write32(0x2000, 0x12345678);
-    
+
     // CMPM.L (A1)+,(A0)+ - opcode: 0xB189 (size=10, Ax=0, Ay=1)
     try m68k.memory.write16(0x100, 0xB189);
     m68k.pc = 0x100;
     const long_cycles = try m68k.step();
-    
+
     // Check: Z flag should be set (equal), both pointers incremented by 4
     try std.testing.expect((m68k.sr & M68k.FLAG_Z) != 0);
     try std.testing.expectEqual(@as(u32, 0x1004), m68k.a[0]);
     try std.testing.expectEqual(@as(u32, 0x2004), m68k.a[1]);
     try std.testing.expectEqual(@as(u32, 12), long_cycles);
-    
+
     // Test CMPM.W with different values
     m68k.a[2] = 0x3000;
     m68k.a[3] = 0x4000;
     try m68k.memory.write16(0x3000, 0x1234);
     try m68k.memory.write16(0x4000, 0x5678);
-    
+
     // CMPM.W (A3)+,(A2)+ - opcode: 0xB54B (size=01, Ax=2, Ay=3)
     try m68k.memory.write16(0x102, 0xB54B);
     m68k.pc = 0x102;
     const word_cycles = try m68k.step();
-    
+
     // Check: Z flag should be clear (not equal), N flag set (negative result)
     try std.testing.expect((m68k.sr & M68k.FLAG_Z) == 0);
     try std.testing.expect((m68k.sr & M68k.FLAG_N) != 0);
@@ -607,32 +609,32 @@ test "M68k ABCD - Add BCD with Extend" {
     const allocator = std.testing.allocator;
     var m68k = M68k.init(allocator);
     defer m68k.deinit();
-    
+
     // Test ABCD D1,D0 - Add BCD digits
     // 0x29 + 0x48 = 0x77 in BCD
     m68k.d[0] = 0x29;
     m68k.d[1] = 0x48;
     m68k.sr &= ~M68k.FLAG_X; // Clear X flag
-    
+
     // ABCD D1,D0 - opcode: 0xC101 (Dx=0, Dy=1, mode=register)
     try m68k.memory.write16(0x100, 0xC101);
     m68k.pc = 0x100;
     const cycles_1 = try m68k.step();
-    
+
     try std.testing.expectEqual(@as(u8, 0x77), @as(u8, @truncate(m68k.d[0])));
     try std.testing.expect((m68k.sr & M68k.FLAG_C) == 0); // No carry
     try std.testing.expectEqual(@as(u32, 6), cycles_1);
-    
+
     // Test with carry: 0x99 + 0x01 = 0x00 with carry
     m68k.d[2] = 0x99;
     m68k.d[3] = 0x01;
     m68k.sr &= ~M68k.FLAG_X;
-    
+
     // ABCD D3,D2 - opcode: 0xC503
     try m68k.memory.write16(0x102, 0xC503);
     m68k.pc = 0x102;
     const cycles_2 = try m68k.step();
-    
+
     try std.testing.expectEqual(@as(u8, 0x00), @as(u8, @truncate(m68k.d[2])));
     try std.testing.expect((m68k.sr & M68k.FLAG_C) != 0); // Carry set
     try std.testing.expect((m68k.sr & M68k.FLAG_X) != 0); // Extend set
@@ -643,18 +645,18 @@ test "M68k SBCD - Subtract BCD with Extend" {
     const allocator = std.testing.allocator;
     var m68k = M68k.init(allocator);
     defer m68k.deinit();
-    
+
     // Test SBCD D1,D0 - Subtract BCD
     // 0x77 - 0x48 = 0x29 in BCD
     m68k.d[0] = 0x77;
     m68k.d[1] = 0x48;
     m68k.sr &= ~M68k.FLAG_X;
-    
+
     // SBCD D1,D0 - opcode: 0x8101
     try m68k.memory.write16(0x100, 0x8101);
     m68k.pc = 0x100;
     const cycles = try m68k.step();
-    
+
     try std.testing.expectEqual(@as(u8, 0x29), @as(u8, @truncate(m68k.d[0])));
     try std.testing.expect((m68k.sr & M68k.FLAG_C) == 0); // No borrow
     try std.testing.expectEqual(@as(u32, 6), cycles);
@@ -664,17 +666,17 @@ test "M68k NBCD - Negate BCD with Extend" {
     const allocator = std.testing.allocator;
     var m68k = M68k.init(allocator);
     defer m68k.deinit();
-    
+
     // Test NBCD D0 - Negate BCD
     // 0x00 - 0x48 = 0x52 in BCD (with borrow)
     m68k.d[0] = 0x48;
     m68k.sr &= ~M68k.FLAG_X;
-    
+
     // NBCD D0 - opcode: 0x4800
     try m68k.memory.write16(0x100, 0x4800);
     m68k.pc = 0x100;
     const cycles = try m68k.step();
-    
+
     try std.testing.expectEqual(@as(u8, 0x52), @as(u8, @truncate(m68k.d[0])));
     try std.testing.expect((m68k.sr & M68k.FLAG_C) != 0); // Borrow set
     try std.testing.expectEqual(@as(u32, 6), cycles);
@@ -684,7 +686,7 @@ test "M68k MOVEC - Control Register Access" {
     const allocator = std.testing.allocator;
     var m68k = M68k.init(allocator);
     defer m68k.deinit();
-    
+
     // Test MOVEC D0,SFC - Move to SFC (Source Function Code)
     m68k.d[0] = 5;
     // MOVEC D0,SFC - opcode: 0x4E7B 0x0000 (D0=0x0000, SFC=0)
@@ -692,10 +694,10 @@ test "M68k MOVEC - Control Register Access" {
     try m68k.memory.write16(0x102, 0x0000);
     m68k.pc = 0x100;
     const movec_sfc_cycles = try m68k.step();
-    
+
     try std.testing.expectEqual(@as(u3, 5), m68k.sfc);
     try std.testing.expectEqual(@as(u32, 12), movec_sfc_cycles);
-    
+
     // Test MOVEC D1,DFC - Move to DFC (Destination Function Code)
     m68k.d[1] = 3;
     // MOVEC D1,DFC - opcode: 0x4E7B 0x1001 (D1=0x1000, DFC=1)
@@ -703,10 +705,10 @@ test "M68k MOVEC - Control Register Access" {
     try m68k.memory.write16(0x106, 0x1001);
     m68k.pc = 0x104;
     const movec_dfc_cycles = try m68k.step();
-    
+
     try std.testing.expectEqual(@as(u3, 3), m68k.dfc);
     try std.testing.expectEqual(@as(u32, 12), movec_dfc_cycles);
-    
+
     // Test MOVEC A0,USP - Move to USP (User Stack Pointer)
     m68k.a[0] = 0x12345678;
     // MOVEC A0,USP - opcode: 0x4E7B 0x8800 (A0=0x8000, USP=0x800)
@@ -714,10 +716,10 @@ test "M68k MOVEC - Control Register Access" {
     try m68k.memory.write16(0x10A, 0x8800);
     m68k.pc = 0x108;
     const movec_usp_cycles = try m68k.step();
-    
+
     try std.testing.expectEqual(@as(u32, 0x12345678), m68k.usp);
     try std.testing.expectEqual(@as(u32, 12), movec_usp_cycles);
-    
+
     // Test MOVEC VBR,D2 - Move from VBR
     m68k.vbr = 0xABCDEF00;
     // MOVEC VBR,D2 - opcode: 0x4E7A 0x2801 (D2=0x2000, VBR=0x801)
@@ -725,10 +727,10 @@ test "M68k MOVEC - Control Register Access" {
     try m68k.memory.write16(0x10E, 0x2801);
     m68k.pc = 0x10C;
     const movec_vbr_cycles = try m68k.step();
-    
+
     try std.testing.expectEqual(@as(u32, 0xABCDEF00), m68k.d[2]);
     try std.testing.expectEqual(@as(u32, 12), movec_vbr_cycles);
-    
+
     // Test MOVEC CACR,D3 - Move from CACR (Cache Control Register)
     m68k.cacr = 0x00000101;
     // MOVEC CACR,D3 - opcode: 0x4E7A 0x3002 (D3=0x3000, CACR=2)
@@ -736,7 +738,7 @@ test "M68k MOVEC - Control Register Access" {
     try m68k.memory.write16(0x112, 0x3002);
     m68k.pc = 0x110;
     const movec_cacr_cycles = try m68k.step();
-    
+
     try std.testing.expectEqual(@as(u32, 0x00000101), m68k.d[3]);
     try std.testing.expectEqual(@as(u32, 14), movec_cacr_cycles);
 }
@@ -908,19 +910,19 @@ test "M68k MOVEP - Move Peripheral Data" {
     const allocator = std.testing.allocator;
     var m68k = M68k.init(allocator);
     defer m68k.deinit();
-    
+
     // Test MOVEP.W (d16,Ay),Dx - Memory to Register (Word)
     try m68k.memory.write8(0x1000, 0x12);
     try m68k.memory.write8(0x1002, 0x34);
     m68k.a[0] = 0x1000;
-    
+
     // MOVEP.W 0(A0),D0 - opcode: 0x0148 0x0000
     try m68k.memory.write16(0x100, 0x0148);
     try m68k.memory.write16(0x102, 0x0000);
     m68k.pc = 0x100;
-    
+
     const cycles = try m68k.step();
-    
+
     try std.testing.expectEqual(@as(u32, 16), cycles);
     try std.testing.expectEqual(@as(u32, 0x104), m68k.pc);
     try std.testing.expectEqual(@as(u16, 0x1234), @as(u16, @truncate(m68k.d[0])));
@@ -930,16 +932,16 @@ test "M68k BFCHG - Bit Field Change" {
     const allocator = std.testing.allocator;
     var m68k = M68k.init(allocator);
     defer m68k.deinit();
-    
+
     // Test BFCHG D0{4:8} - Change bits 4-11 (8 bits starting at offset 4)
     m68k.d[0] = 0x00000F00; // Bits 8-11 set (0x0F00)
-    
+
     // BFCHG D0{4:8} - opcode: 0xEAC0 ext: 0x0108 (offset=4, width=8)
     try m68k.memory.write16(0x100, 0xEAC0);
     try m68k.memory.write16(0x102, 0x0108); // offset=4 (bits 10-6), width=8 (bits 4-0)
     m68k.pc = 0x100;
     _ = try m68k.step();
-    
+
     // Bits 4-11 flipped: bits 4-7 (0->1=0xF0), bits 8-11 (1->0=0x00)
     try std.testing.expectEqual(@as(u32, 0x000000F0), m68k.d[0]);
 }
@@ -948,16 +950,16 @@ test "M68k BFSET - Bit Field Set" {
     const allocator = std.testing.allocator;
     var m68k = M68k.init(allocator);
     defer m68k.deinit();
-    
+
     // Test BFSET D0{0:16} - Set bits 0-15
     m68k.d[0] = 0x00000000;
-    
+
     // BFSET D0{0:16} - opcode: 0xEEC0 ext: 0x0010 (offset=0, width=16)
     try m68k.memory.write16(0x100, 0xEEC0);
     try m68k.memory.write16(0x102, 0x0010);
     m68k.pc = 0x100;
     _ = try m68k.step();
-    
+
     try std.testing.expectEqual(@as(u32, 0x0000FFFF), m68k.d[0]);
 }
 
@@ -965,16 +967,16 @@ test "M68k BFCLR - Bit Field Clear" {
     const allocator = std.testing.allocator;
     var m68k = M68k.init(allocator);
     defer m68k.deinit();
-    
+
     // Test BFCLR D1{8:8} - Clear bits 8-15
     m68k.d[1] = 0xFFFFFFFF;
-    
+
     // BFCLR D1{8:8} - opcode: 0xECC1 ext: 0x0208 (offset=8, width=8)
     try m68k.memory.write16(0x100, 0xECC1);
     try m68k.memory.write16(0x102, 0x0208);
     m68k.pc = 0x100;
     _ = try m68k.step();
-    
+
     try std.testing.expectEqual(@as(u32, 0xFFFF00FF), m68k.d[1]);
 }
 
@@ -982,32 +984,32 @@ test "M68k RTE - Return from Exception with 68020 Stack Frame" {
     const allocator = std.testing.allocator;
     var m68k = M68k.init(allocator);
     defer m68k.deinit();
-    
+
     // Test Format 0 (short format, 8 bytes)
     m68k.a[7] = 0x2000;
     try m68k.memory.write16(0x2000, 0x2700); // SR (supervisor mode)
     try m68k.memory.write32(0x2002, 0x1000); // PC
     try m68k.memory.write16(0x2006, 0x0018); // Format 0, Vector 6 (CHK)
-    
+
     // RTE - opcode: 0x4E73
     try m68k.memory.write16(0x100, 0x4E73);
     m68k.pc = 0x100;
     const format0_cycles = try m68k.step();
-    
+
     try std.testing.expectEqual(@as(u16, 0x2700), m68k.sr);
     try std.testing.expectEqual(@as(u32, 0x1000), m68k.pc);
     try std.testing.expectEqual(@as(u32, 0x2008), m68k.a[7]); // SP += 8 (format 0)
     try std.testing.expectEqual(@as(u32, 20), format0_cycles);
-    
+
     // Test Format 2 (6-word format, 12 bytes)
     m68k.a[7] = 0x3000;
     try m68k.memory.write16(0x3000, 0x2000); // SR
     try m68k.memory.write32(0x3002, 0x2000); // PC
     try m68k.memory.write16(0x3006, 0x201C); // Format 2, Vector 7 (TRAPV)
-    
+
     m68k.pc = 0x100;
     const format2_cycles = try m68k.step();
-    
+
     try std.testing.expectEqual(@as(u16, 0x2000), m68k.sr);
     try std.testing.expectEqual(@as(u32, 0x2000), m68k.pc);
     try std.testing.expectEqual(@as(u32, 0x300C), m68k.a[7]); // SP += 12 (format 2)
@@ -1113,18 +1115,18 @@ test "M68k TRAP - Exception with Format/Vector Word" {
     const allocator = std.testing.allocator;
     var m68k = M68k.init(allocator);
     defer m68k.deinit();
-    
+
     // Setup exception vector for TRAP #5 (vector 37 = 0x94)
     try m68k.memory.write32(37 * 4, 0x5000); // Exception handler at 0x5000
-    
+
     m68k.a[7] = 0x2000; // Stack pointer
     m68k.sr = 0x2700;
-    
+
     // TRAP #5 - opcode: 0x4E45
     try m68k.memory.write16(0x100, 0x4E45);
     m68k.pc = 0x100;
     _ = try m68k.step();
-    
+
     // Check stack frame
     try std.testing.expectEqual(@as(u16, 0x2700), try m68k.memory.read16(0x1FF8)); // SR
     try std.testing.expectEqual(@as(u32, 0x0102), try m68k.memory.read32(0x1FFA)); // PC (after TRAP)
@@ -1133,7 +1135,7 @@ test "M68k TRAP - Exception with Format/Vector Word" {
     const vector = (fv & 0xFFF) / 4;
     try std.testing.expectEqual(@as(u4, 0), format); // Format 0
     try std.testing.expectEqual(@as(u8, 37), @as(u8, @truncate(vector))); // Vector 37 (TRAP #5)
-    
+
     // Check PC jumped to exception handler
     try std.testing.expectEqual(@as(u32, 0x5000), m68k.pc);
     // Check supervisor mode
@@ -2243,7 +2245,7 @@ test "M68k bus hook data-write error enters vector 2 with DFC in format A access
     var m68k = M68k.init(allocator);
     defer m68k.deinit();
 
-    var ctx = BusHookTestContext{ .mode = .bus_error_on_data_write };
+    var ctx = BusHookTestContext{ .mode = .bus_error_on_data_write, .error_target_addr = 0x2400 };
     m68k.memory.setBusHook(busHookTestHandler, &ctx);
 
     try m68k.memory.write32(m68k.getExceptionVector(2), 0x9400);
@@ -2278,7 +2280,9 @@ test "M68k data access translator remaps execute write while preserving logical 
     m68k.memory.setBusHook(busHookTestHandler, &ctx);
     m68k.memory.setAddressTranslator(dataAccessAddTranslator, null);
 
-    try m68k.memory.write16(0x8D00, 0x3080); // MOVE.W D0,(A0)
+    // Write instruction directly to data[] to bypass address translator
+    // (instruction setup is not a data-space access)
+    std.mem.writeInt(u16, m68k.memory.data[0x8D00..0x8D02], 0x3080, .big); // MOVE.W D0,(A0)
     m68k.pc = 0x8D00;
     m68k.a[0] = 0x0300; // logical data address, translated to 0x1300
     m68k.d[0] = 0x00001234;
@@ -2287,8 +2291,13 @@ test "M68k data access translator remaps execute write while preserving logical 
 
     // MOVE.W D0,(A0): 4 (base) + 0 (src reg) + 4 (dst indirect) = 8
     try std.testing.expectEqual(@as(u32, 8), try m68k.step());
-    try std.testing.expectEqual(@as(u16, 0x1234), try m68k.memory.read16(0x1300)); // translated target
-    try std.testing.expectEqual(@as(u16, 0x0000), try m68k.memory.read16(0x0300)); // logical location unchanged
+    // Verify physical memory directly (bypassing address translator)
+    const b0: u16 = m68k.memory.data[0x1300];
+    const b1: u16 = m68k.memory.data[0x1301];
+    try std.testing.expectEqual(@as(u16, 0x1234), (b0 << 8) | b1); // translated target
+    const c0: u16 = m68k.memory.data[0x0300];
+    const c1: u16 = m68k.memory.data[0x0301];
+    try std.testing.expectEqual(@as(u16, 0x0000), (c0 << 8) | c1); // logical location unchanged
     try std.testing.expect(ctx.saw_data_write);
     try std.testing.expectEqual(@as(u32, 0x0300), ctx.last_addr); // hook sees logical address
     try std.testing.expectEqual(@as(u3, 0b011), ctx.last_access.function_code);
@@ -2799,7 +2808,7 @@ test "M68k extended-EA instructions advance PC by decoded size" {
     m68k.pc = 0xE800;
     const tst_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0xE804), m68k.pc);
-    try std.testing.expectEqual(@as(u32, 4), tst_cycles);
+    try std.testing.expectEqual(@as(u32, 12), tst_cycles);
 
     // PEA (16,A1)
     try m68k.memory.write16(0xE810, 0x4869);
@@ -2821,7 +2830,7 @@ test "M68k extended-EA instructions advance PC by decoded size" {
     const scc_cycles = try m68k.step();
     try std.testing.expectEqual(@as(u32, 0xE824), m68k.pc);
     try std.testing.expectEqual(@as(u8, 0xFF), try m68k.memory.read8(0x2610));
-    try std.testing.expectEqual(@as(u32, 4), scc_cycles);
+    try std.testing.expectEqual(@as(u32, 12), scc_cycles);
 
     // MULU.W (16,A3),D0
     try m68k.memory.write16(0xE830, 0xC0EB);

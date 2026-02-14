@@ -1,336 +1,121 @@
-# TODO
+# 68020 에뮬레이터 개발 로드맵
+> **목표**: Macintosh LC 하드웨어 완벽 에뮬레이션 및 System 6.0.8 부팅 성공
 
-## Macintosh LC 및 System 6.0.8 구동 로드맵
-
-System 6.0.8 구동을 위한 단계별 할 일 목록입니다.
-
-### 1단계: 주변 장치(Peripherals) 기초 구현
-- [x] **VIA 6522 기초 구현**: 타이머, 인터럽트 플래그 로직 (완료)
-- [x] **메모리 맵 및 MMIO 라우팅**: Mac LC의 24/32비트 I/O 영역 라우팅 엔진 구현 (완료)
-- [x] **RTC (Real Time Clock)**: 초 단위 시계 및 PRAM(Non-volatile RAM) 256바이트 구현 (완료)
-- [x] **RBV (VIA2) & VBL**: 인터럽트 제어 및 수직 동기화 신호 발생 (완료)
-- [x] **Video Framebuffer**: VRAM 및 8비트 Palette(VDAC) 기초 구현 (완료)
-- [x] **SCSI (NCR 5380)**: 컨트롤러 레지스터 기초 설계 (완료)
-- [x] **ADB (Apple Desktop Bus)**: 키보드/마우스 통신 인터페이스 통합 (완료)
-
-### 2단계: 시스템 고도화 및 정밀도 증진 (신규 로드맵)
-- [ ] **CPU: 버스 사이클 정확도 (Bus-Cycle Accuracy)**: 파이프라인(Fetch/Decode/Execute) 모델링 및 Wait States 반영
-- [ ] **중앙 이벤트 스케줄러 (Event Scheduler)**: 장치 간 타이밍 동기화를 위한 이벤트 큐 아키텍처 도입
-- [ ] **주변 장치 프로토콜 정밀화**: SCSI Phase 전환 로직 및 ADB 비트 타이밍 구현
-- [ ] **사운드 및 비디오 타이밍 정밀화**: Apple Sound Chip 샘플링 동기화 및 HBL 타이밍 반영
-
-### 3단계: 시스템 아키텍처 완성
-- [ ] **Mac LC 메모리 맵 최종 구성**:
-    - ROM: 0x400000 (또는 기종별 위치) 매핑 및 로딩
-    - RAM: 0x000000 시작, 동적 크기 할당
-- [ ] **ROM 부팅 및 Trap(A-Line) 핸들링 검증**
-
-## 현재 상태(2026-02-13 기준)
-
-- 예외/트랩 핵심 보강 완료:
-  - `BKPT` 디버거 훅 + 미연결 시 `vector 4` 폴백
-  - `Address Error(vector 3)`와 `Bus Error(vector 2)` 분리
-  - `RTE` 특권 검사(`vector 8`) 반영
-  - `Format A/B` 포함 `RTE` 프레임 복귀 회귀 추가
-  - 중첩 `TRAP` 예외 복귀 회귀 추가
-- 코프로세서 미구현 환경 대응 완료:
-  - F-line을 사용자 핸들러로 위임 가능한 coprocessor dispatch 경로 반영
-- 경량 캐시/버스 추상화 완료:
-  - `CACR` 기반 I-cache enable/invalidate 가시 효과
-  - bus hook / address translator 연동 포인트 반영
-- 스택 포인터 모델 1차 검증 완료:
-  - `S/M` 전환 매트릭스 회귀 테스트 추가
-  - `MOVE USP` 구현 + 특권 위반(`vector 8`) 회귀 추가
-  - `MOVEC USP/ISP/MSP` raw register 동작(A7 비자동 동기화) 회귀 추가
-  - User/ISP/MSP 전환 + 중첩 IRQ + RTE 복귀 조합 회귀 추가
-  - `docs/stack-pointer-model.md` 체크리스트 검증 완료로 갱신
-- 예외 프레임 정확도 2차 보강 완료:
-  - vector 2/3를 Format A 프레임 정책으로 통일
-  - `fault address`, `access word`, `IR` 필드 기록 강화
-  - 디코더 확장 워드 fetch 실패 시 precise fault address 보존 회귀 추가
-- `root.zig` 외부 API 검증 확대 완료:
-  - `m68k_set_irq`, `m68k_set_irq_vector`, `m68k_set_spurious_irq` C API 통합 테스트 추가
-  - STOP 상태 인터럽트 재개 시 `cycle/PC/SR` 검증 추가
-  - `zig test src/root.zig` 기준 IRQ/STOP 관련 회귀 자동 검증
-- C API 에러 가시성/안전성 1차 보강 완료:
-  - status-code 기반 메모리 API(`*_memory_*_status`) 추가
-  - out-parameter 기반 read API로 실패 원인 식별 가능 경로 제공
-  - 전역 `gpa` 접근에 mutex 적용(create/destroy 경합 완화)
-  - context 기반 생성/파괴 API(`m68k_context_*`, `m68k_create_in_context`, `m68k_destroy_in_context`) 추가
-  - context allocator callback 주입 API(`m68k_context_set_allocator_callbacks`) 추가
-  - root API에서 out-of-range/alignment/null-pointer 실패 경로 회귀 추가
-- 불법 인코딩/확장 워드 예외 커버리지 확장 완료:
-  - `CALLM/RTM`, `TRAPcc`, line-A/F, `MOVEC` 경계 인코딩 회귀 강화
-  - `MOVEC` invalid control register 인코딩의 vector 4 라우팅 검증 추가
-  - line-A/F 경계 opcode(`AFFF`, `FFFF`)의 vector/return PC 일관성 검증 추가
-
-## 높은 우선순위
-
-- 에러 처리 통합 ✅(완료)
-  - ✅ 구조화된 에러 타입 정의 (`src/core/errors.zig`)
-  - ✅ `anyerror` → 특정 에러 셋으로 전환
-  - ✅ C API 에러 매핑 함수 확장 및 문서화 (`docs/error-handling.md`)
-  - ✅ 에러 코드 범주별 분류 (Memory: -2~-6, CPU: -10~-16, Decode: -20~-23, Config: -30~-32)
-  - ✅ 사람이 읽을 수 있는 에러 메시지 함수 (`errorMessage`)
-  - ✅ 테스트 통과 확인
-
-- 스택 포인터 모델 세부 규칙 완성 ✅(완료)
-
-- 예외 프레임 정확도 2차 보강 ✅(완료)
-
-- `root.zig` 외부 API 검증 확대 ✅(완료)
-
-- C API 에러 가시성/안전성 강화 ✅(완료)
-  - ✅ status code + out-parameter 기반 메모리 접근 API 추가(`*_status`)
-  - ✅ 버스/정렬/인자 오류를 반환 코드로 노출하는 회귀 테스트 추가
-  - ✅ 전역 `gpa` create/destroy 경로 mutex 보호
-  - ✅ context 주입 생성/파괴 API 추가(allocator 도메인 분리)
-  - ✅ 구 API(`m68k_read/write_memory_*`) deprecate/권장 경로 README 문서화
-  - ✅ 외부 allocator callback 주입 API 추가
-
-- 불법 인코딩/확장 워드 예외 커버리지 확장 ✅(완료)
-
-- 소프트웨어 TLB(주소 변환 캐시) 도입 ✅(완료)
-  - ✅ `address_translator` 경로에 8-entry direct-mapped TLB fast-path 추가
-  - ✅ key(page + FC + space + R/W), value(physical page base) 캐싱 반영
-  - ✅ flush/invalidate API 제공(`Memory.invalidateTranslationCache`, `m68k_invalidate_translation_cache`)
-  - ✅ translator 콜백 호출 감소/flush 일관성 회귀 테스트 추가
-  - ✅ 설계/무효화 정책 + 벤치 비교 수치 문서화(`docs/translation-cache.md`)
-
-## 중간 우선순위
-
-- 사이클 모델 정리(기능 정확도 유지, 선택적 정밀화) ✅(완료)
-  - ✅ 현재 고정 사이클 반환 경로 문서화(`docs/cycle-model.md`)
-  - ✅ `README.md`에 "근사/검증됨" 표기 규칙 반영
-  - 진행: `MOVEM` 비용 모델/회귀 반영 완료, 분기/bitfield 사이즈·오퍼랜드별 사이클 정밀화 반영 완료
-  - 진행: 분기(`BRA/Bcc`) 변위 크기별 taken/not-taken 비용 반영 + 회귀 테스트 추가
-  - 진행: bitfield 명령의 reg/mem 오퍼랜드별 비용 반영 + 회귀 테스트 추가
-  - 진행: 예외/트랩 경로(Illegal/LineA/LineF/BKPT/AddressError/Privilege) cycle assertion 회귀 확장
-  - 진행: fault subtype(`instruction fetch=50`, `decode ext fetch=52`, `execute data access=54`) 세분화 + 회귀 반영
-  - 진행: `TRAP/TRAPV/RESET(supervisor)/TRAPcc/RTE/illegal decode` 고정 cycle assertion 회귀 추가
-  - 진행: `ABCD/SBCD/NBCD/MOVEP/CAS2/CMPM/SHIFT/MOVEA/STOP/ORI-ANDI-EORI` cycle assertion 회귀 추가
-  - 진행: `CHK2/CMP2/CALLM-RTM/TAS/MUL*_L/DIV*_L` cycle assertion 회귀 추가
-  - 진행: `PACK/UNPK/MOVEC/ComplexEA/extended-EA/memory shift` cycle assertion 회귀 추가
-  - ✅ 핵심 명령 cycle 회귀 테스트 범위 확장 완료
-
-- `MOVEM` 비용 모델 세분화 ✅(완료)
-  - 레지스터 개수, 방향(mem->reg/reg->mem), predecrement/postincrement 별 비용 반영
-  - word/long 전송 폭 차등 반영
-  - 6개 모드 조합 cycle 테스트 통과
-
-- 코프로세서 호환 레이어 정리 ✅(완료)
-  - ✅ coprocessor handler 계약(입력 opcode/PC, 반환 semantics) 문서화(`docs/coprocessor-handler.md`)
-  - ✅ 핸들러 부재/거부/fault 반환의 표준 동작 고정 + 회귀 테스트 반영
-
-- 버스 추상화 고도화 ✅(완료)
-  - ✅ FC 기반 접근 정책(사용자/슈퍼바이저 + 프로그램/데이터) CPU fetch/data 경로 회귀 테스트 강화
-  - ✅ `retry/halt/bus_error` 시 CPU step의 재시도/정지/예외 진입 규칙 회귀 테스트 추가
-  - ✅ data access 경로를 bus hook/translator 경로와 통합(`read/write*Bus`)하고 회귀 검증 반영
-
-- Dynamic Bus Sizing(8/16/32-bit 포트) 모델 도입 ✅(완료)
-  - ✅ 메모리 영역별 port width 속성 정의
-  - ✅ 32-bit 접근의 분할 버스 사이클(예: 8-bit 포트에서 4회 접근) 모델링
-  - ✅ 포트 폭별 read/write 분할 회귀 테스트 추가(`src/memory.zig`)
-  - ✅ 기능 정확도와 독립적인 cycle 비용 계산 경로 분리(`memory.takeSplitCyclePenalty` + `cpu.step` opt-in 연동)
-  - ✅ cycle 기대값 테스트 추가(포트 폭 분할 fetch/data 경로)
-
-- I-Cache 구조 고증 정합성 보강(68020 256B) ✅(완료)
-  - ✅ line 데이터 폭을 longword 중심으로 재정의(64 entries x 4 bytes)
-  - ✅ fetch/fill 로직을 32-bit 정렬 기반으로 조정
-  - ✅ 기존 경량 모델과 호환되는 옵션/마이그레이션 정책 유지
-  - ✅ cache hit/miss/invalidate 회귀 + 용량/정렬 정책 문서화
-
-- 파이프라인 스톨 모델 정밀화(옵션 기반) ✅(완료)
-  - ✅ `PipelineMode.approx`: taken branch flush penalty(`+2`) + memory-dst overlap 보정(`-1`) 반영
-  - ✅ `PipelineMode.detailed`: 초기 골격(`+4`/`-2`) 반영(세부 상태머신은 후속 단계)
-  - ✅ 기능 정확도 경로(`off`)와 분리된 cycle 모델 유지
-  - ✅ 모드별 cycle 회귀 테스트 + 정책 문서(`docs/cycle-model.md`) 업데이트
-
-## 낮은 우선순위
-
-- PMMU-ready 확장 준비 ✅(완료)
-  - ✅ PMMU 명령 감지/상태 레지스터 최소 모델 초안(coprocessor-id=0 감지, MMUSR 최소 상태)
-  - ✅ 실제 페이지 워크 없이도 OS probe가 즉시 실패하지 않는 호환 레이어(옵션 플래그 기반) 추가
-  - ✅ 옵션 플래그 기반 최소 동작 명세서 작성(`docs/pmmu-ready.md`)
-
-- 캐시/파이프라인 옵션 고도화(비기본) ✅(완료)
-  - ✅ I-cache 경량 모델 통계(hit/miss 카운터) 노출(`getICacheStats`, root API getter)
-  - ✅ fetch miss penalty 옵션 조정 경로 추가(`setICacheFetchMissPenalty`)
-  - ✅ 파이프라인 모드 플래그(`off/approx/detailed`) 추가(동작 확장 포인트 예약)
-  - ✅ 기능 플래그 + 문서화 반영
-
-- 플랫폼 주변장치/PIC 레이어 준비 ✅(완료)
-  - ✅ CPU 외부 모듈로 PIC(priority encoder), timer tick, 최소 UART 스텁 구현(`src/platform/*`)
-  - ✅ 코어와 플랫폼 경계(IRQ 주입/ack/vector 계약) 문서화(`docs/platform-layer.md`)
-  - ✅ 샘플 플랫폼 루프에서 주기 IRQ/핸들러 왕복 데모 동작(`src/demo_platform_loop.zig`)
-
-- 벤치마크/품질 측정 ✅(완료)
-  - ✅ 대표 워크로드 3개 기준 회귀 성능 측정 실행기 추가(`src/bench_workloads.zig`)
-  - ✅ CPI/MIPS는 참고 지표, 기능 회귀 우선 게이트 정책 명시
-  - ✅ 재현 가능한 벤치 실행 절차/기준 수치 문서화(`docs/benchmark-guide.md`)
-
-- 외부 검증 스위트 연동 ✅(완료)
-  - ✅ 외부 68k validation vectors(JSON) 로드 테스트 러너 추가(`src/external_vectors.zig`)
-  - ✅ 희소 인코딩(bitfield/packed decimal/exception return PC) subset 벡터 우선 연동(`external_vectors/subset`)
-  - ✅ `zig build test` 경로와 CI(`.github/workflows/ci.yml`)에서 subset 자동 실행
-
-## 후속 유지보수 모음
-
-- 예외 프레임 정확도 보강 시 stack/frame 상호영향 회귀 유지
-- Format B 및 드문 fault subtype 세분 필드 검증 확장
-- C API 에러 코드형 ABI(v2) 추가 시 동일 시나리오를 새 API로 병행 검증
-- 구 API 제거 시기/버전 정책 확정(선택)
-- bitfield 희소 인코딩 및 외부 validation vector와의 교차검증
-- 신규 명령/사이클 정책 변경 시 고정 cycle assertion 테스트 동반 갱신
-- 핸들러 반환 타입 확장 시 코프로세서 계약 문서/회귀 동시 갱신
-- 소프트웨어 TLB 도입 후 translator/hook 변경 시 flush/invalidate 누락 회귀 테스트 유지
+이 문서는 프로젝트의 현재 진행 상황과 향후 개발 계획을 "중요도"와 "개발 순서"를 기준으로 정리한 것입니다.
 
 ---
 
-## 신규 개선 과제 (2026-02-13 분석)
+## 🚀 1. 높은 우선순위 (High Priority)
+**시스템 안정화 및 핵심 아키텍처 완성**을 위한 필수 과제입니다.
 
-### 높은 우선순위
+### 아키텍처 및 스케줄러 통합
+- [x] **이벤트 스케줄러 통합 확대**
+    - 현재 `VIA6522`와 `MacLcSystem`에 적용된 중앙 스케줄러를 `RBV` 및 `Video` 하위 시스템까지 확대 적용.
+    - [x] 정밀한 비디오 타이밍(VBL/HBL) 동기화 구현.
+- [x] **인터럽트 처리 검증 강화**
+    - [x] VIA/RBV 인터럽트가 CPU Core로 정확하게 전파되는지 검증하는 시나리오 테스트 보강. (완료: `tests/integration/interrupt_propagation.zig`)
+    - [x] 중첩 인터럽트(Nested Interrupts) 및 우선순위 처리 로직의 Edge Case 검증. (완료: Priority Masking, Spurious, Vectorized 테스트 추가)
 
-#### 코드 품질
+### 주변 장치 프로토콜 고도화
+- [x] **SCSI (NCR 5380) 정밀화**
+    - [x] SCSI Phase State Machine (BusFree, Arbitration, Selection, InformationTransfer) 구현.
+    - [x] NCR 5380 레지스터 동작 정밀화 (ICR, Mode, TCR, Bus Status, Phase Match).
+- [x] **ADB (Apple Desktop Bus) 통신 구현**
+    - [x] VIA1 ST0/ST1 기반 상태 머신, Talk/Listen/Flush/SendReset 커맨드 파싱.
+    - [x] 가상 키보드(Address 2) / 마우스(Address 3) 디바이스 및 SRQ 지원.
 
-- **코드 모듈화 개선** ✅
-  - ✅ `cpu.zig` 분리: 예외 처리(`exception.zig`), 인터럽트(`interrupt.zig`), 레지스터 접근(`registers.zig`)
-  - ✅ 목표 달성: 단일 파일 3,600줄 → 각 모듈 1,000줄 이하로 분할 (cpu.zig 현재 745줄)
-  - ✅ 테스트 코드 `cpu_test.zig`로 분리하여 유지보수성 향상
+### 메모리 및 시스템 맵
+- [x] **Mac LC 메모리 맵 최종 구성**
+    - [x] ROM Overlay (리셋 시 0x000000에 ROM 매핑, ROM 영역 접근 시 해제)
+    - [x] 24-bit/32-bit 메모리 맵 완전 구현 (RAM/ROM/MMIO 영역)
+    - [x] ROM 미러링 (0x400000 = 0xF00000), ROM 읽기 전용
+    - [x] ROM 파일 로딩 구현
+- [x] **ROM 부팅 시도 및 Trap 핸들링**
+    - [x] ROM Overlay를 통한 CPU 리셋 벡터 전달 구현
+    - [x] A-Line / F-Line Trap 예외 처리 (기존 구현 확인 완료)
 
-- **에러 처리 통합**
-  - Zig 내부 `anyerror` → 구조화된 에러 타입 전환
-  - C API 에러 매핑 함수(`mapMemoryError` 등) 확장 및 문서화
-  - 목표: 타입 안전성 강화, 디버깅 효율성 향상
+### 🔴 ROM 부팅 블로커 (Critical)
+- [x] **SCC (Zilog 8530) 스텁 구현**
+    - [x] ROM 초기화에서 반드시 SCC 폴링 → 미구현 시 Bus Error 크래시.
+    - [x] 24-bit: `0xC00000`–`0xCFFFFF`, 32-bit: `0x50004000`–`0x50005FFF`.
+    - [x] 최소: RR0 읽기 → Tx Empty 비트 반환.
+- [x] **IWM/SWIM (플로피 컨트롤러) 스텁 구현**
+    - [x] 상태 레지스터 → `0xFF` ("드라이브 없음") 반환.
+    - [x] 24-bit/32-bit MMIO 경로 연결.
+- [x] **`cpu.reset()` MMIO 경로 사용**
+    - [x] `read32Bus()` (supervisor FC) 사용으로 ROM overlay 동작.
+- [x] **`mmioRead24bit` ROM 다중바이트 읽기 버그 수정**
+    - [x] `readRomByte()` → `readRom(offset, size)` 수정.
+- [x] **RBV 미구현 레지스터 방어 코드**
+    - [x] `else => 0` 기본 반환 확인.
+- [x] **통합 실행 루프 구현**
+    - [x] `mac_lc_reset()` + `mac_lc_run_steps()` API 추가.
 
-#### 버스 및 사이클 정밀성 (Phase 1)
+---
 
-- **버스 사이클 상태 머신 구현**
-  - S0-S1-S2-SW-S3 상태 모델링
-  - Wait state 주입 지원
-  - 외부 느린 주변장치(ROM, UART) 타이밍 재현
-  - 작업량: 2-3일
-  - 참조: `docs/bus-cycle-precision-roadmap.md`
+## 🛠 2. 중간 우선순위 (Medium Priority)
+**에뮬레이션 정확도(Accuracy)**를 높이기 위한 기술적 심화 과제입니다.
 
-- **EA(Effective Address) 계산 사이클 세분화**
-  - EA 모드별 사이클 테이블 정의 (68020 User's Manual 기준)
-  - `(An)`, `(An)+`, `-(An)`, `(d16,An)`, `(d8,An,Xn)` 등 각 모드 고정
-  - 작업량: 2일
-  - 회귀 테스트: 각 EA 모드별 사이클 assertion 추가
+### CPU 및 버스 정확도
+- [x] **버스 사이클(Bus Cycle) 정밀 모델링**
+    - [x] memory.zig readXBus/writeXBus에 wait state penalty 통합.
+    - [x] Mac LC wait states: RAM(0ws), ROM(2ws), I/O(4ws) 설정.
+- [x] **EA (Effective Address) 계산 비용 현실화**
+    - [x] NEG/NEGX/CLR/NOT/TST/LEA/Scc/BTST/BSET/BCLR/BCHG에 EA 사이클 적용.
+    - [x] 미사용 InstructionCycles 삭제.
 
-- **타이밍 회귀 테스트 자동화**
-  - Golden reference 기반 자동 테스트
-  - 외부 검증 벡터에 기대 사이클 포함
-  - CI에서 타이밍 변동 자동 탐지
-  - 작업량: 3일
-  - 목표: Phase 1 기본 명령어 사이클 정확도 95% 달성
+### 성능 및 안정성
+- [x] **에러 처리 통합 (Error Handling Integration)** ✅ (완료 2026-02-14)
+  - 구조화된 에러 타입 정의 (`src/core/errors.zig`)
+  - `anyerror` → 특정 에러 셋으로 전환
+  - C API 에러 매핑 함수 확장 및 문서화 (`docs/error-handling.md`)
+  - 에러 코드 범주별 분류 (Memory: -2~-6, CPU: -10~-16, Decode: -20~-23, Config: -30~-32)
+  - 사람이 읽을 수 있는 에러 메시지 함수 (`errorMessage`)
+- [ ] **메모리 할당 최적화**
+    - Arena Allocator 도입을 통한 메모리 할당/해제 오버헤드 감소.
+- [ ] **테스트 자동화 및 리포팅**
+    - `zig build test-all` 통합 러너 구축 및 결과 리포트(JSON/HTML) 생성.
 
-### 중간 우선순위
-
-#### 성능 최적화
-
-- **메모리 할당 최적화**
-  - Arena allocator 도입으로 빠른 할당/해제 경로 추가
-  - Context별 allocator 풀링으로 멀티스레드 성능 개선
-  - 벤치마크 목표: 멀티 인스턴스 생성/파괴 처리량 50% 향상
-
-- **테스트 통합 및 자동화**
-  - 통합 테스트 러너 추가 (`zig build test-all`)
-  - 테스트 결과 리포트 생성 (JSON/HTML)
-  - Coverage 도구 연동 검토 (kcov, Zig 0.14+ 네이티브 지원 대기)
-  - CI/CD 성능 회귀 검사 통합 (벤치마크 자동 실행 + 추이 그래프)
-
-#### 버스 및 사이클 정밀성 (Phase 2) ✅
-
-- **버스 에러 복구 메커니즘 강화** ✅
-  - ✅ 버스 에러 발생 시 재시도 카운터 추가 (최대 3회)
-  - ✅ 재시도 실패 시 예외 프레임에 시도 횟수 기록
-  - ✅ API: `setBusRetryLimit`, `getBusRetryCount`
-
-- **I-Cache 2-way set associative 개선** ✅
-  - ✅ 32 set x 2-way (64 entry) 구조 구현
-  - ✅ LRU(Least Recently Used) 교체 정책 적용
-  - ✅ 히트율 향상 확인
-
-- **사이클 프로파일러** ✅
-  - ✅ 명령어별 누적 사이클 통계 수집 및 리포트 출력 기능
-  - ✅ Top 10 cycle consumers 식별 지원
-
-### 낮은 우선순위
-
-#### 문서 및 예제
-
-- **문서 자동화**
-  - Zig doc comments 표준화
-  - `zig build docs` 명령으로 HTML 문서 생성
-  - C API 참고 문서 자동화 (Doxygen 스타일)
-
-- **예제 확장**
-  - 실용적 예제 추가:
-    - 간단한 OS 부트로더 시뮬레이션
-    - Atari ST 게임 일부 에뮬레이션 (예: Pong 클론)
-    - 어셈블러 통합 예제 (vasm/asmx 연동)
-
-- **디버깅 지원 강화**
-  - GDB 리모트 프로토콜 stub 구현
-  - 메모리/레지스터 덤프 포맷터 (JSON/human-readable)
-  - 실행 추적(trace) 로그 옵션 (CSV/바이너리)
-
-- **플러그인 아키텍처**
-  - 주변장치(PIC/Timer/UART) 동적 로딩 지원
-  - 사용자 정의 버스 컨트롤러 등록 API 강화
-  - 플러그인 예제 및 가이드 문서 작성
-
-#### 버스 및 사이클 정밀성 (Phase 3)
-
-- **파이프라인 스톨 모델 고도화**
-  - Fetch-Decode-Execute-WriteBack 4단계 파이프라인 상태 머신
-  - Data dependency stall (RAW hazard 검출)
-  - Branch prediction (1-bit predictor)
-  - Memory access contention 모델링
-  - 작업량: 5-7일
-
-- **DMA 채널 시뮬레이션**
-  - 간단한 DMA 컨트롤러 stub (`src/platform/dma.zig`)
-  - CPU 사이클 중 버스 중재(arbitration) 시뮬레이션
-  - DMA 전송 중 CPU halt/resume 타이밍 모델링
-  - 사용 사례: Amiga/Atari ST 디스크/비디오 I/O
-  - 작업량: 3-4일
-
-- **실칩 비교 벤치마크**
-  - 실제 68020 보드에서 동일 코드 실행
-  - 사이클 카운터 측정값과 비교
-  - 차이 분석 리포트 생성
-  - 필요 하드웨어: 68020 개발 보드, 로직 분석기
-  - 작업량: 하드웨어 확보 후 1주
-  - 목표: Phase 3 사이클 정확도 99%, 실칩 오차 ±3% 이내
-
-### 장기 과제
-
-- **PMMU 완전 구현**
-  - 현재: 최소 호환 레이어만 존재
-  - 목표: OS 부팅 가능 수준 (Unix/AmigaOS)
-  - 단계별: TLB 구현 → 페이지 폴트 → 보호 도메인
-
-### 기술 부채 정리
-
-- **빌드 시스템 정리**
-  - 개별 실행 파일 12개 → 타겟 그룹화 (`test-*`, `demo-*`)
-  - 불필요한 artifact 제거 또는 조건부 빌드
-
-- **플랫폼 지원 확대**
-  - Windows/Linux 검증 완료 → macOS 명시적 테스트 추가
-  - CI에 macOS runner 추가 (GitHub Actions)
-
-- **의존성 정책 수립**
-  - 현재: zero-dependency 유지 중
-  - 검토: JSON 파서(std.json 충분), 외부 라이브러리 도입 기준 명시
-
-### Quick Wins (즉시 실행 가능)
-
+### Quick Wins ✅ (완료 2026-02-14)
 - [x] `.editorconfig` 추가 (코딩 스타일 통일)
 - [x] `CONTRIBUTING.md` 작성 (PR 가이드라인, 커밋 컨벤션)
 - [x] GitHub Actions에 Windows/macOS 빌드 추가 (기존 Linux만 → 3개 플랫폼)
 - [x] 예제에 실행 결과 및 설명 추가 (`examples/README.md`)
 - [x] `docs/architecture.md` 작성 (전체 구조 다이어그램)
 - [x] LICENSE 파일 명시 (MIT License 추가)
+
+---
+
+## 🔮 3. 낮은 우선순위 (Low Priority / Future)
+**기능 확장** 및 **장기적 최적화** 목표입니다.
+
+- [ ] **PMMU (MMU) 완전 구현**
+    - 현재의 호환 레이어를 넘어, 실제 페이지 테이블 워크(Page Table Walk) 및 보호 도메인 구현 (A/UX 구동 목표).
+- [ ] **사운드 (Apple Sound Chip) 구현**
+    - DMA 기반 오디오 버퍼링 및 샘플링 속도 동기화.
+- [ ] **디버깅 도구 강화**
+    - GDB Remote Protocol 스텁(Stub) 구현으로 외부 디버거 연동 지원.
+    - 실행 추적(Execution Trace) 로그의 포맷화 및 시각화 도구 지원.
+- [ ] **코어 최적화 (JIT)**
+    - 장기적으로 인터프리터 방식에서 JIT(Just-In-Time) 컴파일러 도입 검토.
+
+---
+
+## ✅ 4. 완료된 항목 (Completed)
+이미 구현 및 검증이 완료된 주요 기능입니다.
+
+### 하드웨어 (Foundation)
+- [x] **CPU Core**: MC68020 명령어 셋(ISA), 예외 처리, 어드레싱 모드 기본 구현.
+- [x] **VIA 6522**: 타이머(T1/T2), 인터럽트 플래그, 기본 레지스터 로직.
+- [x] **RBV (Video/Interrupt)**: 기본 인터럽트 라우팅 및 레지스터 설계.
+- [x] **Video**: VRAM (512KB) 매핑, 8비트 CLUT(Color Lookup Table) 지원.
+- [x] **RTC**: 초 단위 시계 및 PRAM I/O.
+
+### 아키텍처 (Architecture)
+- [x] **모듈화**: `cpu.zig`, `via6522.zig` 등 핵심 컴포넌트의 모듈 분리 및 의존성 정리.
+- [x] **이벤트 스케줄러 (Event Scheduler)**: `Scheduler` 구조체 및 우선순위 큐(Priority Queue) 기반의 시간 관리 시스템 도입.
+- [x] **소프트웨어 TLB**: 메모리 접근 속도 향상을 위한 주소 변환 캐싱 구현.
+
+### 검증 (Verification)
+- [x] **통합 테스트 환경**: `tests/integration/` 구조 정립 및 CI 연동.
+- [x] **주요 버그 수정**: 비트필드(Bitfield) 명령어, 확장 워드 디코딩, PC 반환 값 등 핵심 로직 수정.

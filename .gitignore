@@ -1,5 +1,6 @@
 # Zig build artifacts
 .zig-cache/
+zig-cache/
 zig-out/
 
 # Downloaded Zig compiler
@@ -19,3 +20,15 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Large Binaries and ROMs
+rom_and_bin/
+*.ROM
+*.sit
+*.bin
+
+# Local build/test logs
+*_out.txt
+output*.txt
+test_out.txt
+build_out_*.txt
