@@ -172,7 +172,7 @@ pub const MacLcSystem = struct {
         return .ok;
     }
 
-    pub fn addressTranslator(context: ?*anyopaque, addr: u32, access: memory.BusAccess) anyerror!u32 {
+    pub fn addressTranslator(context: ?*anyopaque, addr: u32, access: memory.BusAccess) memory.errors.MemoryError!u32 {
         _ = context;
         _ = access;
         return addr; // We handle all mapping in MMIO hooks

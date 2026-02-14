@@ -88,13 +88,6 @@ fn mapMemoryError(err: errors.MemoryError) c_int {
     return errors.memoryErrorToStatus(err);
 }
 
-fn mapAnyError(err: anyerror) c_int {
-    return if (@as(?errors.EmulatorError, @errorCast(err))) |e| 
-        errors.errorToStatus(e)
-    else 
-        STATUS_MEMORY_ERROR;
-}
-
 export fn m68k_create() ?*cpu.M68k {
     return m68k_create_with_memory(16 * 1024 * 1024);
 }

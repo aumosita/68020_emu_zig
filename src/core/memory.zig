@@ -1,5 +1,6 @@
 const std = @import("std");
 const bus_cycle = @import("bus_cycle.zig");
+pub const errors = @import("errors.zig");
 
 pub const MemoryConfig = struct {
     size: u32 = 16 * 1024 * 1024, // Default 16MB
@@ -26,7 +27,7 @@ pub const BusAccess = struct {
 
 pub const BusSignal = enum { ok, retry, halt, bus_error };
 pub const BusHook = *const fn (ctx: ?*anyopaque, logical_addr: u32, access: BusAccess) BusSignal;
-pub const AddressTranslator = *const fn (ctx: ?*anyopaque, logical_addr: u32, access: BusAccess) anyerror!u32;
+pub const AddressTranslator = *const fn (ctx: ?*anyopaque, logical_addr: u32, access: BusAccess) errors.MemoryError!u32;
 pub const MmioRead = *const fn (ctx: ?*anyopaque, logical_addr: u32, size: u8) ?u32;
 pub const MmioWrite = *const fn (ctx: ?*anyopaque, logical_addr: u32, size: u8, value: u32) bool;
 pub const PortWidth = enum(u8) { Width8 = 1, Width16 = 2, Width32 = 4 };
