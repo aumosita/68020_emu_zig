@@ -1,4 +1,6 @@
 const std = @import("std");
+const scsi_device = @import("scsi_device.zig");
+const ScsiDevice = scsi_device.ScsiDevice;
 
 /// NCR 5380 SCSI Controller
 /// Implements SCSI bus phase state machine for Macintosh LC.
@@ -78,6 +80,10 @@ pub const Scsi5380 = struct {
     mode: u8 = 0, // Reg 2: Mode Register
     tcr: u8 = 0, // Reg 3: Target Command Register
     sel_enable: u8 = 0, // Reg 4 Write: Select Enable Register
+
+    // ── Device Management ──
+    devices: [8]?ScsiDevice = [_]?ScsiDevice{null} ** 8,
+    active_device: ?ScsiDevice = null,
 
     // ── Internal Bus State ──
     bus_state: BusState = .BusFree,
@@ -269,31 +275,26 @@ pub const Scsi5380 = struct {
     /// Called when the initiator asserts SEL after winning arbitration.
     /// Returns true if a target responded.
     fn attemptSelection(self: *Scsi5380) bool {
-        // In a real system, the initiator puts its ID + target ID on the bus.
-        // We check if any virtual device responds.
-
         // Parse target ID from bus data (excluding initiator bit)
         const initiator_bit = @as(u8, 1) << self.initiator_id;
         const target_bits = self.bus_data & ~initiator_bit;
 
-        if (target_bits == 0) {
-            // No target specified
-            return false;
-        }
+        if (target_bits == 0) return false;
 
         // Find the target ID
         var tid: u3 = 0;
         while (tid < 7) : (tid += 1) {
             if ((target_bits & (@as(u8, 1) << tid)) != 0) {
-                break;
+                if (self.devices[tid]) |dev| {
+                    self.target_id = tid;
+                    self.active_device = dev;
+                    return true;
+                }
             }
         }
 
-        // Currently no virtual SCSI devices are connected.
-        // Selection always times out (no device responds).
-        // In the future, a disk image or CD-ROM emulation
-        // would register here and respond with BSY.
         self.target_id = null;
+        self.active_device = null;
         return false;
     }
 
@@ -385,5 +386,10 @@ pub const Scsi5380 = struct {
     /// Check if the SCSI controller has a pending interrupt.
     pub fn getInterruptOutput(self: *const Scsi5380) bool {
         return self.irq_active;
+    }
+
+    /// Attach a virtual SCSI device to a target ID
+    pub fn attach(self: *Scsi5380, id: u3, dev: ScsiDevice) void {
+        self.devices[id] = dev;
     }
 };

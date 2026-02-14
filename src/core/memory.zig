@@ -1,5 +1,6 @@
 const std = @import("std");
 const bus_cycle = @import("bus_cycle.zig");
+const tracer_mod = @import("tracer.zig");
 pub const errors = @import("errors.zig");
 
 pub const MemoryConfig = struct {
@@ -68,6 +69,7 @@ pub const Memory = struct {
     tlb: [TlbEntries]TlbEntry,
     bus_cycle_sm: bus_cycle.BusCycleStateMachine, // 버스 사이클 상태 머신
     bus_cycle_enabled: bool, // 버스 사이클 모델링 활성화 여부
+    tracer: ?*tracer_mod.Tracer = null,
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) Memory {
@@ -258,7 +260,10 @@ pub const Memory = struct {
 
     fn read8BusRaw(self: *const Memory, logical_addr: u32, access: BusAccess) !u8 {
         if (self.mmio_read) |read| {
-            if (read(self.mmio_ctx, logical_addr, 1)) |val| return @truncate(val);
+            if (read(self.mmio_ctx, logical_addr, 1)) |val| {
+                if (self.tracer) |t| t.traceMmio(false, logical_addr, 1, val);
+                return @truncate(val);
+            }
         }
         const addr = try @constCast(self).resolveBusAddress(logical_addr, access);
         if (addr >= self.size) return error.BusError;
@@ -267,7 +272,10 @@ pub const Memory = struct {
 
     fn read16BusRaw(self: *const Memory, logical_addr: u32, access: BusAccess) !u16 {
         if (self.mmio_read) |read| {
-            if (read(self.mmio_ctx, logical_addr, 2)) |val| return @truncate(val);
+            if (read(self.mmio_ctx, logical_addr, 2)) |val| {
+                if (self.tracer) |t| t.traceMmio(false, logical_addr, 2, val);
+                return @truncate(val);
+            }
         }
         const addr = try @constCast(self).resolveBusAddress(logical_addr, access);
         if (self.enforce_alignment and (addr & 1) != 0) return error.AddressError;
@@ -279,7 +287,10 @@ pub const Memory = struct {
 
     fn read32BusRaw(self: *const Memory, logical_addr: u32, access: BusAccess) !u32 {
         if (self.mmio_read) |read| {
-            if (read(self.mmio_ctx, logical_addr, 4)) |val| return val;
+            if (read(self.mmio_ctx, logical_addr, 4)) |val| {
+                if (self.tracer) |t| t.traceMmio(false, logical_addr, 4, val);
+                return val;
+            }
         }
         const addr = try @constCast(self).resolveBusAddress(logical_addr, access);
         if (self.enforce_alignment and (addr & 1) != 0) return error.AddressError;
@@ -293,7 +304,10 @@ pub const Memory = struct {
 
     fn write8BusRaw(self: *Memory, logical_addr: u32, value: u8, access: BusAccess) !void {
         if (self.mmio_write) |write| {
-            if (write(self.mmio_ctx, logical_addr, 1, value)) return;
+            if (write(self.mmio_ctx, logical_addr, 1, value)) {
+                if (self.tracer) |t| t.traceMmio(true, logical_addr, 1, value);
+                return;
+            }
         }
         const addr = try self.resolveBusAddress(logical_addr, access);
         if (addr >= self.size) return error.BusError;
@@ -302,7 +316,10 @@ pub const Memory = struct {
 
     fn write16BusRaw(self: *Memory, logical_addr: u32, value: u16, access: BusAccess) !void {
         if (self.mmio_write) |write| {
-            if (write(self.mmio_ctx, logical_addr, 2, value)) return;
+            if (write(self.mmio_ctx, logical_addr, 2, value)) {
+                if (self.tracer) |t| t.traceMmio(true, logical_addr, 2, value);
+                return;
+            }
         }
         const addr = try self.resolveBusAddress(logical_addr, access);
         if (self.enforce_alignment and (addr & 1) != 0) return error.AddressError;
@@ -313,7 +330,10 @@ pub const Memory = struct {
 
     fn write32BusRaw(self: *Memory, logical_addr: u32, value: u32, access: BusAccess) !void {
         if (self.mmio_write) |write| {
-            if (write(self.mmio_ctx, logical_addr, 4, value)) return;
+            if (write(self.mmio_ctx, logical_addr, 4, value)) {
+                if (self.tracer) |t| t.traceMmio(true, logical_addr, 4, value);
+                return;
+            }
         }
         const addr = try self.resolveBusAddress(logical_addr, access);
         if (self.enforce_alignment and (addr & 1) != 0) return error.AddressError;

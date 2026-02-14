@@ -55,6 +55,33 @@
     - 병목 지점 식별
     - 최적화 대상 우선순위 결정
 
+### SCSI 모듈 고도화
+
+- [ ] **SCSI 장치 에뮬레이션 및 데이터 전송**
+    - [ ] 가상 장치 인터페이스 (`ScsiDevice`) 및 가상 디스크 모듈 구현
+    - [ ] SCSI-1 필수 명령어 세트 구현 (`INQUIRY`, `READ`, `WRITE`, `TEST UNIT READY` 등)
+    - [ ] 정보 전송 단계(Information Transfer Phase) 상태 머신 완성 및 REQ/ACK 핸드셰이크 구현
+    - [ ] Pseudo-DMA 지원 및 블록 전송 최적화
+    - [ ] SCSI 트레이스 로깅 기능 추가 (명령어 및 단계 변화 추적)
+
+### 기타 주변기기 고도화
+
+- [ ] **SCC (Serial Communications Controller) 기능 확장**
+    - [ ] Zilog 8530 전체 레지스터 상태 머신 구현 (WR/RR 쌍)
+    - [ ] 비동기 데이터 전송 및 인터럽트 로직 보강
+    - [ ] 호스트 터미널/콘솔 출력을 위한 후크 추가
+- [ ] **IWM/SWIM (Floppy Controller) 실체화**
+    - [ ] Sony 3.5인치 드라이브 프로토콜 시뮬레이션
+    - [ ] 디스크 이미지(.dsk, .img) 로드 및 섹터 읽기/쓰기 로직 구현
+    - [ ] GCR 데이터 디코딩 또는 상위 레벨 섹터 액세스 추상화
+- [ ] **ADB (Apple Desktop Bus) 입력 통합**
+    - [ ] ADB 트랜시버 상태 머신 구현 및 장치 주소 관리
+    - [ ] 호스트 OS의 키보드/마우스 이벤트를 ADB 패킷으로 변환 및 주입
+    - [ ] 다중 입력 장치 지원 (Keyboard ID 2, Mouse ID 3)
+- [ ] **RTC (Real Time Clock) 및 PRAM 지속성**
+    - [ ] 실시간 시계 카운터 및 알람 레지스터 연동
+    - [ ] 256바이트 PRAM 데이터 구현 및 파일 기반 저장/로드(Persistence) 지원
+
 ### 사용성 개선
 
 - [ ] **명령줄 인터페이스 개선**

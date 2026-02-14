@@ -39,6 +39,12 @@ test "Mac LC ROM boot smoke test" {
     var cpu = M68k.init(allocator);
     defer cpu.deinit();
 
+    // Setup Tracer
+    var tracer = try m68020.Tracer.init("trace.log");
+    defer tracer.deinit();
+    cpu.tracer = &tracer;
+    cpu.memory.tracer = &tracer;
+
     // Install Mac LC MMIO hooks
     cpu.memory.setBusHook(MacLcSystem.busHook, sys);
     cpu.memory.setAddressTranslator(MacLcSystem.addressTranslator, sys);

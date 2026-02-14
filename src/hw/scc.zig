@@ -13,6 +13,8 @@ const std = @import("std");
 ///
 /// Minimal stub: returns "Tx buffer empty, no pending RX" to satisfy ROM polling.
 pub const Scc = struct {
+    pub const TxCallback = *const fn (ctx: ?*anyopaque, char: u8) void;
+
     // Per-channel state
     channels: [2]Channel = .{ Channel.init(), Channel.init() },
 
@@ -38,6 +40,10 @@ pub const Scc = struct {
 
         // Read register pointer (set by WR0 bits 2:0)
         rr_pointer: u3 = 0,
+
+        // Output callback
+        tx_callback: ?TxCallback = null,
+        callback_ctx: ?*anyopaque = null,
 
         pub fn init() Channel {
             return .{};
@@ -126,7 +132,10 @@ pub const Scc = struct {
         var ch = &self.channels[channel_idx];
 
         if (is_data) {
-            // Data register write — discard (no serial output)
+            // Data register write — send to callback if set
+            if (ch.tx_callback) |cb| {
+                cb(ch.callback_ctx, value);
+            }
             return;
         } else {
             // Control register write

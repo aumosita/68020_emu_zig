@@ -118,3 +118,49 @@ test "SCSI: Phase match in Bus and Status register" {
     const bas2 = scsi.read(5);
     try testing.expect((bas2 & Scsi5380.BAS_PHASE_MATCH) != 0);
 }
+
+test "SCSI: Selection succeeds with attached device" {
+    const allocator = std.testing.allocator;
+    var scsi = Scsi5380.init();
+    
+    // Create and attach a virtual disk to ID 0
+    var disk = try root.ScsiDisk.init(allocator, 0);
+    defer disk.deinit();
+    scsi.attach(0, disk.device());
+
+    // Arbitration
+    scsi.write(2, Scsi5380.MODE_ARBITRATE);
+    scsi.write(0, 0x80); // ID 7
+    scsi.write(1, Scsi5380.ICR_DATA_BUS);
+
+    // Selection: Target 0 (bit 0) + Initiator 7 (bit 7)
+    scsi.write(0, 0x81);
+    scsi.write(1, Scsi5380.ICR_SEL | Scsi5380.ICR_DATA_BUS);
+
+    // Should transition to InformationTransfer (immediate in our simplified model)
+    try testing.expectEqual(Scsi5380.BusState.InformationTransfer, scsi.bus_state);
+    try testing.expect(scsi.target_id == 0);
+}
+
+test "SCSI: INQUIRY command returns device info" {
+    const allocator = std.testing.allocator;
+    var disk = try root.ScsiDisk.init(allocator, 0);
+    defer disk.deinit();
+    
+    const device = disk.device();
+    var status: u8 = 0xFF;
+    
+    // INQUIRY CDB: 12 00 00 00 24 00 (alloc length 36 bytes)
+    const cdb = [_]u8{ 0x12, 0x00, 0x00, 0x00, 0x24, 0x00 };
+    
+    const transfer_len = device.executeCommand(&cdb, &status);
+    try testing.expect(transfer_len > 0);
+    try testing.expectEqual(@as(u8, 0), status); // Good status
+
+    var buffer: [36]u8 = undefined;
+    const read_len = device.readData(&buffer);
+    try testing.expectEqual(transfer_len, read_len);
+    
+    // Check for "APPLE" vendor string in inquiry data
+    try testing.expect(std.mem.indexOf(u8, &buffer, "APPLE") != null);
+}

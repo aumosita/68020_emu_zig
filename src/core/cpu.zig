@@ -5,6 +5,7 @@ const executor = @import("executor.zig");
 const registers = @import("registers.zig");
 const exception = @import("exception.zig");
 const interrupt = @import("interrupt.zig");
+const tracer_mod = @import("tracer.zig");
 
 pub const M68k = struct {
     const ICacheSets = 32;
@@ -70,6 +71,7 @@ pub const M68k = struct {
     profiler_enabled: bool = false,
     profiler_data: ?*CycleProfilerData = null,
     pipeline_mode: PipelineMode,
+    tracer: ?*tracer_mod.Tracer = null,
     allocator: std.mem.Allocator,
 
     pub const CycleProfilerData = struct {
@@ -224,6 +226,12 @@ pub const M68k = struct {
             else => return err,
         };
         const opcode = fetch.opcode;
+
+        // Trace instruction
+        if (self.tracer) |t| {
+            t.traceInstruction(self, self.pc, opcode);
+        }
+
         // Hot-path optimization: NOP has no side effects beyond PC/cycle update.
         if (opcode == 0x4E71) {
             self.pc += 2;
@@ -693,6 +701,9 @@ pub const M68k = struct {
     }
 
     pub fn enterException(self: *M68k, vector: u8, return_pc: u32, format: u4, new_ipl: ?u3) !void {
+        if (self.tracer) |t| {
+            t.traceException(vector, return_pc, format);
+        }
         try exception.enterException(self, vector, return_pc, format, new_ipl);
     }
 

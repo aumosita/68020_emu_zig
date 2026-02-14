@@ -8,6 +8,7 @@ const adb = @import("../hw/adb.zig");
 const rtc = @import("../hw/rtc.zig");
 const scc_mod = @import("../hw/scc.zig");
 const iwm_mod = @import("../hw/iwm.zig");
+const scsi_disk = @import("../hw/scsi_disk.zig");
 const bus_cycle = @import("../core/bus_cycle.zig");
 const Scheduler = @import("../core/scheduler.zig").Scheduler;
 
@@ -20,6 +21,9 @@ pub const MacLcSystem = struct {
     rtc: rtc.Rtc,
     scc: scc_mod.Scc,
     iwm: iwm_mod.Iwm,
+
+    // Virtual Disks
+    scsi0: ?*scsi_disk.ScsiDisk = null,
 
     // Scheduler
     scheduler: Scheduler,
@@ -90,8 +94,16 @@ pub const MacLcSystem = struct {
         sys.adb = adb.Adb.init();
         sys.rtc = rtc.Rtc.init();
         sys.scc = scc_mod.Scc.init();
+        sys.scc.channels[0].tx_callback = sccDefaultTxCallback; // Channel A
+        sys.scc.channels[1].tx_callback = sccDefaultTxCallback; // Channel B
+
         sys.iwm = iwm_mod.Iwm.init();
         sys.scheduler = Scheduler.init(allocator);
+
+        // Attach virtual disk to SCSI ID 0
+        sys.scsi0 = try scsi_disk.ScsiDisk.init(allocator, 0);
+        sys.scsi.attach(0, sys.scsi0.?.device());
+
         sys.address_mode_32 = false; // Default to 24-bit
         sys.rom_overlay = true; // Overlay active after reset
         sys.total_cycles = 0;
@@ -154,6 +166,7 @@ pub const MacLcSystem = struct {
     }
 
     pub fn deinit(self: *MacLcSystem, allocator: std.mem.Allocator) void {
+        if (self.scsi0) |s0| s0.deinit();
         self.scheduler.deinit();
         self.video.deinit(allocator);
         allocator.free(self.ram);
@@ -552,5 +565,11 @@ pub const MacLcSystem = struct {
     /// Re-enable ROM overlay (simulates hardware reset)
     pub fn resetOverlay(self: *MacLcSystem) void {
         self.rom_overlay = true;
+    }
+
+    // Default SCC output callback (prints to stdout)
+    pub fn sccDefaultTxCallback(_: ?*anyopaque, char: u8) void {
+        const stdout = std.io.getStdOut().writer();
+        stdout.print("{c}", .{char}) catch {};
     }
 };

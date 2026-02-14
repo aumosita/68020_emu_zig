@@ -7,11 +7,14 @@ const rtc = @import("hw/rtc.zig");
 const rbv = @import("hw/rbv.zig");
 const video = @import("hw/video.zig");
 const scsi = @import("hw/scsi.zig");
+const scsi_device = @import("hw/scsi_device.zig");
+const scsi_disk = @import("hw/scsi_disk.zig");
 const adb = @import("hw/adb.zig");
 const scc_mod = @import("hw/scc.zig");
 const iwm_mod = @import("hw/iwm.zig");
 const mac_lc = @import("systems/mac_lc.zig");
 const scheduler = @import("core/scheduler.zig");
+const tracer = @import("core/tracer.zig");
 
 // Export Zig types for use in other Zig code
 pub const M68k = cpu.M68k;
@@ -22,11 +25,14 @@ pub const Via6522 = via6522.Via6522;
 pub const Rtc = rtc.Rtc;
 pub const Rbv = rbv.Rbv;
 pub const Scsi5380 = scsi.Scsi5380;
+pub const ScsiDevice = scsi_device.ScsiDevice;
+pub const ScsiDisk = scsi_disk.ScsiDisk;
 pub const Adb = adb.Adb;
 pub const Scc = scc_mod.Scc;
 pub const Iwm = iwm_mod.Iwm;
 pub const MacLcSystem = mac_lc.MacLcSystem;
 pub const Scheduler = scheduler.Scheduler;
+pub const Tracer = tracer.Tracer;
 
 // Export C API for use in other languages (Python, C, etc.)
 // Global page allocator for C API
