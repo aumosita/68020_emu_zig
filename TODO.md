@@ -67,14 +67,34 @@
 ### 성능 및 안정성
 - [x] **에러 처리 통합 (Error Handling Integration)** ✅ (완료 2026-02-14)
   - 구조화된 에러 타입 정의 (`src/core/errors.zig`)
-  - `anyerror` → 특정 에러 셋으로 전환
+  - `anyerror` → 특정 에러 셋으로 전환 완료 (3곳 → 0곳)
   - C API 에러 매핑 함수 확장 및 문서화 (`docs/error-handling.md`)
   - 에러 코드 범주별 분류 (Memory: -2~-6, CPU: -10~-16, Decode: -20~-23, Config: -30~-32)
   - 사람이 읽을 수 있는 에러 메시지 함수 (`errorMessage`)
+  - 테스트 통과: 265/265
 - [ ] **메모리 할당 최적화**
     - Arena Allocator 도입을 통한 메모리 할당/해제 오버헤드 감소.
 - [ ] **테스트 자동화 및 리포팅**
     - `zig build test-all` 통합 러너 구축 및 결과 리포트(JSON/HTML) 생성.
+
+### 코드 품질 및 리팩토링
+- [ ] **executor.zig 모듈 분리** (현재 2,075줄)
+    - 산술 명령어 (`executor_arithmetic.zig`)
+    - 논리 명령어 (`executor_logical.zig`)
+    - 분기 명령어 (`executor_branch.zig`)
+    - 시스템 명령어 (`executor_system.zig`)
+    - 목표: 각 모듈 500줄 이하 유지
+- [ ] **cpu_test.zig 분할** (현재 2,925줄, 95개 테스트)
+    - Helper 함수 분리 → `tests/core/cpu_test_helpers.zig`
+    - 카테고리별 분리:
+      - `cpu_test_init.zig` - 초기화 및 리셋
+      - `cpu_test_cache.zig` - 캐시 및 파이프라인
+      - `cpu_test_exceptions.zig` - 예외 처리
+      - `cpu_test_interrupts.zig` - 인터럽트
+      - `cpu_test_stack.zig` - 스택 포인터 뱅킹
+      - `cpu_test_special.zig` - 특수 명령어 (MOVEC, BCD)
+      - `cpu_test_hooks.zig` - 콜백 (coprocessor, bus hook)
+    - 목표: 각 파일 400줄 이하 유지
 
 ### Quick Wins ✅ (완료 2026-02-14)
 - [x] `.editorconfig` 추가 (코딩 스타일 통일)
