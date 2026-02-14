@@ -65,8 +65,8 @@ pub const MacLcSystem = struct {
     const IWM_END_24: u32 = 0xEFFFFF;
 
     // 32-bit mode — Mac LC I/O base is 0x50F00000 (not 0x50000000 like Mac II)
-    const ROM_BASE_32: u32 = 0x40000000;
-    const ROM_END_32: u32 = 0x4007FFFF; // 512KB
+    const ROM_BASE_32: u32 = 0x40800000; // Mac LC ROM base in 32-bit mode
+    const ROM_END_32: u32 = 0x4087FFFF; // 512KB
     const IO_BASE_32: u32 = 0x50000000;
     const VIA1_BASE_32: u32 = 0x50F00000;
     const VIA1_END_32: u32 = 0x50F3FFFF; // VIA mirrors every 0x2000 across 256KB
@@ -199,10 +199,15 @@ pub const MacLcSystem = struct {
         var self: *MacLcSystem = @ptrCast(@alignCast(context orelse return null));
 
         // ── 32-bit I/O space: check BEFORE 24-bit masking ──
-        // The Mac LC address bus is physically 32-bit; I/O devices at 0x50Fxxxxx
-        // are accessed with full 32-bit addresses even when CPUmode is 24-bit.
         if (addr_raw >= IO_BASE_32) {
             return self.mmioRead32bit(addr_raw, size);
+        }
+
+        // ── 32-bit ROM: check BEFORE 24-bit masking ──
+        if (addr_raw >= ROM_BASE_32 and addr_raw <= ROM_END_32) {
+            self.rom_overlay = false;
+            const offset = addr_raw - ROM_BASE_32;
+            return self.readRom(offset, size);
         }
 
         const addr = if (!self.address_mode_32) addr_raw & 0x00FFFFFF else addr_raw;
@@ -214,17 +219,12 @@ pub const MacLcSystem = struct {
             }
         }
 
-        if (addr >= ROM_BASE_32 and addr <= ROM_END_32) {
-            // 32-bit ROM
-            self.rom_overlay = false;
-            const offset = addr - ROM_BASE_32;
-            return self.readRom(offset, size);
-        } else if (!self.address_mode_32) {
+        if (!self.address_mode_32) {
             // 24-bit mode I/O regions
             if (self.mmioRead24bit(addr, size)) |val| return val;
         }
 
-        // ── RAM: route ALL RAM accesses through sys.ram[] ──
+        // ── RAM ──
         if (addr < self.ram_size) {
             return self.readRam(addr, size);
         }
@@ -325,23 +325,26 @@ pub const MacLcSystem = struct {
             return self.mmioWrite32bit(addr_raw, val8, value);
         }
 
+        // ── 32-bit ROM write: check BEFORE 24-bit masking ──
+        if (addr_raw >= ROM_BASE_32 and addr_raw <= ROM_END_32) {
+            self.rom_overlay = false;
+            return true; // ROM is read-only
+        }
+
         const addr = if (!self.address_mode_32) addr_raw & 0x00FFFFFF else addr_raw;
 
-        // ── ROM Overlay write: writing to overlaid area goes to RAM ──
+        // ── ROM Overlay write ──
         if (self.rom_overlay and addr < self.rom_size) {
             self.rom_overlay = false;
         }
 
         const val8: u8 = @truncate(value);
 
-        if (addr >= ROM_BASE_32 and addr <= ROM_END_32) {
-            self.rom_overlay = false;
-            return true; // ROM is read-only — ignore
-        } else if (!self.address_mode_32) {
+        if (!self.address_mode_32) {
             if (self.mmioWrite24bit(addr, val8, value)) return true;
         }
 
-        // ── RAM: route ALL RAM writes through sys.ram[] ──
+        // ── RAM ──
         if (addr < self.ram_size) {
             self.writeRam(addr, size, value);
             return true;

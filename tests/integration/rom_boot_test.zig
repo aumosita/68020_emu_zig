@@ -64,7 +64,7 @@ test "Mac LC ROM boot smoke test" {
     try std.testing.expectEqual(pc_vec, cpu.pc);
 
     // Execute first N steps
-    const MAX_STEPS: u32 = 2000;
+    const MAX_STEPS: u32 = 5000;
     std.debug.print("\n--- Executing up to {} steps ---\n", .{MAX_STEPS});
 
     var last_pc: u32 = cpu.pc;
