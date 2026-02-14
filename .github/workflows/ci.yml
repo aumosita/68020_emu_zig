@@ -5,7 +5,7 @@ on:
   pull_request:
 
 jobs:
-  test:
+  test-linux:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -18,3 +18,40 @@ jobs:
 
       - name: Build Tests (includes external vector subset)
         run: zig build test
+
+      - name: Build Examples
+        run: zig build
+
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.13.0
+
+      - name: Build Tests
+        run: zig build test
+
+      - name: Build Examples
+        run: zig build
+
+  test-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.13.0
+
+      - name: Build Tests
+        run: zig build test
+
+      - name: Build Examples
+        run: zig build

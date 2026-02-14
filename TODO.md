@@ -66,6 +66,14 @@ System 6.0.8 구동을 위한 단계별 할 일 목록입니다.
 
 ## 높은 우선순위
 
+- 에러 처리 통합 ✅(완료)
+  - ✅ 구조화된 에러 타입 정의 (`src/core/errors.zig`)
+  - ✅ `anyerror` → 특정 에러 셋으로 전환
+  - ✅ C API 에러 매핑 함수 확장 및 문서화 (`docs/error-handling.md`)
+  - ✅ 에러 코드 범주별 분류 (Memory: -2~-6, CPU: -10~-16, Decode: -20~-23, Config: -30~-32)
+  - ✅ 사람이 읽을 수 있는 에러 메시지 함수 (`errorMessage`)
+  - ✅ 테스트 통과 확인
+
 - 스택 포인터 모델 세부 규칙 완성 ✅(완료)
 
 - 예외 프레임 정확도 2차 보강 ✅(완료)
@@ -320,9 +328,9 @@ System 6.0.8 구동을 위한 단계별 할 일 목록입니다.
 
 ### Quick Wins (즉시 실행 가능)
 
-- [ ] `.editorconfig` 추가 (코딩 스타일 통일)
-- [ ] `CONTRIBUTING.md` 작성 (PR 가이드라인, 커밋 컨벤션)
-- [ ] GitHub Actions에 Windows 빌드 추가 (현재 Linux만)
-- [ ] 예제에 실행 결과 스크린샷/출력 추가 (`examples/README.md`)
-- [ ] `docs/architecture.md` 작성 (전체 구조 다이어그램)
-- [ ] LICENSE 파일 명시 (현재 없음, MIT/Apache 2.0 검토)
+- [x] `.editorconfig` 추가 (코딩 스타일 통일)
+- [x] `CONTRIBUTING.md` 작성 (PR 가이드라인, 커밋 컨벤션)
+- [x] GitHub Actions에 Windows/macOS 빌드 추가 (기존 Linux만 → 3개 플랫폼)
+- [x] 예제에 실행 결과 및 설명 추가 (`examples/README.md`)
+- [x] `docs/architecture.md` 작성 (전체 구조 다이어그램)
+- [x] LICENSE 파일 명시 (MIT License 추가)

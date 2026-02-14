@@ -73,11 +73,17 @@ fn callbackFree(raw_ctx: *anyopaque, buf: []u8, buf_align: u8, _: usize) void {
     free_cb(ctx.callback_ctx, @ptrCast(buf.ptr), buf.len, alignment);
 }
 
-fn mapMemoryError(err: anyerror) c_int {
-    return switch (err) {
-        error.InvalidAddress, error.BusError, error.AddressError, error.BusRetry, error.BusHalt => STATUS_MEMORY_ERROR,
-        else => STATUS_MEMORY_ERROR,
-    };
+const errors = @import("core/errors.zig");
+
+fn mapMemoryError(err: errors.MemoryError) c_int {
+    return errors.memoryErrorToStatus(err);
+}
+
+fn mapAnyError(err: anyerror) c_int {
+    return if (@as(?errors.EmulatorError, @errorCast(err))) |e| 
+        errors.errorToStatus(e)
+    else 
+        STATUS_MEMORY_ERROR;
 }
 
 export fn m68k_create() ?*cpu.M68k {
