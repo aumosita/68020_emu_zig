@@ -17,16 +17,6 @@ zig build benchmark
 
 기능 회귀 우선, 성능 변화는 재현 가능한 절차로 추적.
 
-## 플랫폼 레이어 (`src/platform/`)
-
-CPU 코어 외부에서 IRQ 중재를 담당하는 최소 플랫폼 계층:
-
-| 모듈 | 역할 |
-|------|------|
-| `pic.zig` | IRQ 우선순위 인코딩, 마스킹 |
-| `timer.zig` | 주기적 틱 생성 |
-| `uart_stub.zig` | 시리얼 I/O 플레이스홀더 |
-
 ## 외부 검증 벡터
 
 `external_vectors.zig` — JSON 형식 68k validation vector를 로드하여 회귀 테스트에 반영.
