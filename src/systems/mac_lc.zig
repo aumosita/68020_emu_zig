@@ -64,23 +64,23 @@ pub const MacLcSystem = struct {
     const IWM_BASE_24: u32 = 0xE00000;
     const IWM_END_24: u32 = 0xEFFFFF;
 
-    // 32-bit mode
+    // 32-bit mode — Mac LC I/O base is 0x50F00000 (not 0x50000000 like Mac II)
     const ROM_BASE_32: u32 = 0x40000000;
     const ROM_END_32: u32 = 0x4007FFFF; // 512KB
     const IO_BASE_32: u32 = 0x50000000;
-    const VIA1_BASE_32: u32 = 0x50000000;
-    const VIA1_END_32: u32 = 0x50001FFF;
-    const SCSI_BASE_32: u32 = 0x50010000;
-    const SCSI_END_32: u32 = 0x50011FFF;
-    const VDAC_BASE_32: u32 = 0x50024000;
-    const VDAC_END_32: u32 = 0x50024FFF;
-    const RBV_BASE_32: u32 = 0x50026000;
-    const RBV_END_32: u32 = 0x50027FFF;
-    const SCC_BASE_32: u32 = 0x50004000;
-    const SCC_END_32: u32 = 0x50005FFF;
-    const IWM_BASE_32: u32 = 0x50016000;
-    const IWM_END_32: u32 = 0x50017FFF;
-    const VRAM_BASE_32: u32 = 0x50F40000;
+    const VIA1_BASE_32: u32 = 0x50F00000;
+    const VIA1_END_32: u32 = 0x50F3FFFF; // VIA mirrors every 0x2000 across 256KB
+    const SCSI_BASE_32: u32 = 0x50F10000;
+    const SCSI_END_32: u32 = 0x50F11FFF;
+    const VDAC_BASE_32: u32 = 0x50F24000;
+    const VDAC_END_32: u32 = 0x50F24FFF;
+    const RBV_BASE_32: u32 = 0x50F26000;
+    const RBV_END_32: u32 = 0x50F27FFF;
+    const SCC_BASE_32: u32 = 0x50F04000;
+    const SCC_END_32: u32 = 0x50F05FFF;
+    const IWM_BASE_32: u32 = 0x50F16000;
+    const IWM_END_32: u32 = 0x50F17FFF;
+    const VRAM_BASE_32: u32 = 0x50FC0000;
 
     const ROM_SIZE_MAX: u32 = 512 * 1024; // 512KB
     const CYCLES_PER_VBL = 266667; // ~60Hz at 16MHz
@@ -197,6 +197,14 @@ pub const MacLcSystem = struct {
 
     pub fn mmioRead(context: ?*anyopaque, addr_raw: u32, size: u8) ?u32 {
         var self: *MacLcSystem = @ptrCast(@alignCast(context orelse return null));
+
+        // ── 32-bit I/O space: check BEFORE 24-bit masking ──
+        // The Mac LC address bus is physically 32-bit; I/O devices at 0x50Fxxxxx
+        // are accessed with full 32-bit addresses even when CPUmode is 24-bit.
+        if (addr_raw >= IO_BASE_32) {
+            return self.mmioRead32bit(addr_raw, size);
+        }
+
         const addr = if (!self.address_mode_32) addr_raw & 0x00FFFFFF else addr_raw;
 
         // ── ROM Overlay: ROM at 0x000000 during boot ──
@@ -206,10 +214,7 @@ pub const MacLcSystem = struct {
             }
         }
 
-        if (addr >= IO_BASE_32) {
-            // 32-bit I/O space
-            return self.mmioRead32bit(addr, size);
-        } else if (addr >= ROM_BASE_32 and addr <= ROM_END_32) {
+        if (addr >= ROM_BASE_32 and addr <= ROM_END_32) {
             // 32-bit ROM
             self.rom_overlay = false;
             const offset = addr - ROM_BASE_32;
@@ -228,24 +233,21 @@ pub const MacLcSystem = struct {
     }
 
     fn mmioRead32bit(self: *MacLcSystem, addr: u32, size: u8) ?u32 {
-        if (addr >= VIA1_BASE_32 and addr <= VIA1_END_32) {
-            const reg: u4 = @truncate((addr >> 9) & 0xF);
-            return self.via1.read(reg, self.total_cycles);
-        }
+        // Check specific peripherals BEFORE VIA1 (their ranges overlap VIA1's mirror)
         if (addr >= SCSI_BASE_32 and addr <= SCSI_END_32) {
             return self.scsi.read(@truncate((addr >> 4) & 0x7));
-        }
-        if (addr >= VDAC_BASE_32 and addr <= VDAC_END_32) {
-            return self.video.readVdac(addr);
-        }
-        if (addr >= RBV_BASE_32 and addr <= RBV_END_32) {
-            return self.rbv.read(@truncate((addr >> 9) & 0xF));
         }
         if (addr >= SCC_BASE_32 and addr <= SCC_END_32) {
             return self.scc.read(addr);
         }
         if (addr >= IWM_BASE_32 and addr <= IWM_END_32) {
             return self.iwm.read(addr);
+        }
+        if (addr >= VDAC_BASE_32 and addr <= VDAC_END_32) {
+            return self.video.readVdac(addr);
+        }
+        if (addr >= RBV_BASE_32 and addr <= RBV_END_32) {
+            return self.rbv.read(@truncate((addr >> 9) & 0xF));
         }
         if (addr >= VRAM_BASE_32) {
             const offset = addr - VRAM_BASE_32;
@@ -257,6 +259,11 @@ pub const MacLcSystem = struct {
                     else => 0xFF,
                 };
             }
+        }
+        // VIA1 mirror range (catch-all for 0x50F00000-0x50F3FFFF)
+        if (addr >= VIA1_BASE_32 and addr <= VIA1_END_32) {
+            const reg: u4 = @truncate((addr >> 9) & 0xF);
+            return self.via1.read(reg, self.total_cycles);
         }
         return null;
     }
@@ -311,6 +318,13 @@ pub const MacLcSystem = struct {
 
     pub fn mmioWrite(context: ?*anyopaque, addr_raw: u32, size: u8, value: u32) bool {
         var self: *MacLcSystem = @ptrCast(@alignCast(context orelse return false));
+
+        // ── 32-bit I/O space: check BEFORE 24-bit masking ──
+        if (addr_raw >= IO_BASE_32) {
+            const val8: u8 = @truncate(value);
+            return self.mmioWrite32bit(addr_raw, val8, value);
+        }
+
         const addr = if (!self.address_mode_32) addr_raw & 0x00FFFFFF else addr_raw;
 
         // ── ROM Overlay write: writing to overlaid area goes to RAM ──
@@ -320,9 +334,7 @@ pub const MacLcSystem = struct {
 
         const val8: u8 = @truncate(value);
 
-        if (addr >= IO_BASE_32) {
-            return self.mmioWrite32bit(addr, val8, value);
-        } else if (addr >= ROM_BASE_32 and addr <= ROM_END_32) {
+        if (addr >= ROM_BASE_32 and addr <= ROM_END_32) {
             self.rom_overlay = false;
             return true; // ROM is read-only — ignore
         } else if (!self.address_mode_32) {
@@ -339,6 +351,7 @@ pub const MacLcSystem = struct {
     }
 
     fn mmioWrite32bit(self: *MacLcSystem, addr: u32, val8: u8, value: u32) bool {
+        // Check VRAM first (highest address, no overlap)
         if (addr >= VRAM_BASE_32) {
             const offset = addr - VRAM_BASE_32;
             if (offset < self.video.vram.len) {
@@ -351,23 +364,9 @@ pub const MacLcSystem = struct {
                 return true;
             }
         }
+        // Specific peripherals BEFORE VIA1 mirror range
         if (addr >= SCSI_BASE_32 and addr <= SCSI_END_32) {
             self.scsi.write(@truncate((addr >> 4) & 0x7), val8);
-            return true;
-        }
-        if (addr >= VDAC_BASE_32 and addr <= VDAC_END_32) {
-            self.video.writeVdac(addr, val8);
-            return true;
-        }
-        if (addr >= VIA1_BASE_32 and addr <= VIA1_END_32) {
-            const reg: u4 = @truncate((addr >> 9) & 0xF);
-            self.via1.write(reg, val8, self.total_cycles, &self.scheduler) catch @panic("Via write failed");
-            if (reg == 0x00) self.updateRtc();
-            if (reg == 0x01 or reg == 0x00) self.updateAdb();
-            return true;
-        }
-        if (addr >= RBV_BASE_32 and addr <= RBV_END_32) {
-            self.rbv.write(@truncate((addr >> 9) & 0xF), val8);
             return true;
         }
         if (addr >= SCC_BASE_32 and addr <= SCC_END_32) {
@@ -376,6 +375,22 @@ pub const MacLcSystem = struct {
         }
         if (addr >= IWM_BASE_32 and addr <= IWM_END_32) {
             self.iwm.write(addr, val8);
+            return true;
+        }
+        if (addr >= VDAC_BASE_32 and addr <= VDAC_END_32) {
+            self.video.writeVdac(addr, val8);
+            return true;
+        }
+        if (addr >= RBV_BASE_32 and addr <= RBV_END_32) {
+            self.rbv.write(@truncate((addr >> 9) & 0xF), val8);
+            return true;
+        }
+        // VIA1 mirror range (catch-all)
+        if (addr >= VIA1_BASE_32 and addr <= VIA1_END_32) {
+            const reg: u4 = @truncate((addr >> 9) & 0xF);
+            self.via1.write(reg, val8, self.total_cycles, &self.scheduler) catch @panic("Via write failed");
+            if (reg == 0x00) self.updateRtc();
+            if (reg == 0x01 or reg == 0x00) self.updateAdb();
             return true;
         }
         return false;

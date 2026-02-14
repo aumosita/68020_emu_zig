@@ -131,19 +131,19 @@ test "Mac LC Video VRAM and Palette" {
 
     sys.address_mode_32 = true;
 
-    // Test VRAM write/read (Base 0x50F40000)
-    try m68k.memory.write32Bus(0x50F40000, 0x11223344, .{});
-    const vram_val = try m68k.memory.read32Bus(0x50F40000, .{});
+    // Test VRAM write/read (Base 0x50FC0000)
+    try m68k.memory.write32Bus(0x50FC0000, 0x11223344, .{});
+    const vram_val = try m68k.memory.read32Bus(0x50FC0000, .{});
     try std.testing.expectEqual(@as(u32, 0x11223344), vram_val);
     try std.testing.expectEqual(@as(u8, 0x11), sys.video.vram[0]);
 
-    // Test Palette write (Base 0x50024000)
+    // Test Palette write (Base 0x50F24000)
     // Register 0 (Index) = 1
-    try m68k.memory.write8Bus(0x50024000, 0x01, .{});
+    try m68k.memory.write8Bus(0x50F24000, 0x01, .{});
     // Register 4 (Data) = Red 0xFF, Green 0x88, Blue 0x00
-    try m68k.memory.write8Bus(0x50024004, 0xFF, .{});
-    try m68k.memory.write8Bus(0x50024004, 0x88, .{});
-    try m68k.memory.write8Bus(0x50024004, 0x00, .{});
+    try m68k.memory.write8Bus(0x50F24004, 0xFF, .{});
+    try m68k.memory.write8Bus(0x50F24004, 0x88, .{});
+    try m68k.memory.write8Bus(0x50F24004, 0x00, .{});
 
     try std.testing.expectEqual(@as(u32, 0xFFFF8800), sys.video.palette[1]);
 }
@@ -159,9 +159,9 @@ test "Mac LC SCSI Register Access" {
 
     sys.address_mode_32 = true;
 
-    // Test SCSI Mode register (Offset 0x10000 + 2 * 0x10 = 0x50010020)
-    try m68k.memory.write8Bus(0x50010020, 0x01, .{});
-    const mode = try m68k.memory.read8Bus(0x50010020, .{});
+    // Test SCSI Mode register (Offset 0xF10000 + 2 * 0x10 = 0x50F10020)
+    try m68k.memory.write8Bus(0x50F10020, 0x01, .{});
+    const mode = try m68k.memory.read8Bus(0x50F10020, .{});
     try std.testing.expectEqual(@as(u8, 0x01), mode);
     try std.testing.expectEqual(@as(u8, 0x01), sys.scsi.mode);
 }

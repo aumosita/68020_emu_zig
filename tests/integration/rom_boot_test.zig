@@ -64,7 +64,7 @@ test "Mac LC ROM boot smoke test" {
     try std.testing.expectEqual(pc_vec, cpu.pc);
 
     // Execute first N steps
-    const MAX_STEPS: u32 = 200;
+    const MAX_STEPS: u32 = 2000;
     std.debug.print("\n--- Executing up to {} steps ---\n", .{MAX_STEPS});
 
     var last_pc: u32 = cpu.pc;
@@ -77,8 +77,8 @@ test "Mac LC ROM boot smoke test" {
     while (step < MAX_STEPS) : (step += 1) {
         const prev_pc = cpu.pc;
 
-        // Log first 20 steps and every 50th step
-        const should_log = step < 20 or (step % 50 == 0);
+        // Log first 50 steps and every 10th step
+        const should_log = step < 50 or (step % 10 == 0);
 
         if (should_log) {
             // Read opcode at current PC for logging
