@@ -100,6 +100,7 @@ pub const Executor = struct {
             .BFFFO => return try executeBfffo(m68k, inst),
             .CAS => return try executeCas(m68k, inst),
             .CAS2 => return try executeCas2(m68k, inst),
+            .MOVES => return try executeMoves(m68k, inst),
             .CALLM => return try executeCallm(m68k, inst),
             .RTM => return try executeRtm(m68k, inst),
             .RTD => return try executeRtd(m68k, inst),
@@ -1490,6 +1491,37 @@ fn executeCas2(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     m.setFlag(cpu.M68k.FLAG_C, false);
     m.pc += 6;
     return 20;
+}
+// MOVES: Move to/from address space with function code (privileged)
+// Extension word: bit 15 = D/A, bits 14-12 = register, bit 11 = direction
+//   direction 0 = EA → Rn, direction 1 = Rn → EA
+fn executeMoves(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
+    // Require supervisor mode
+    if ((m.sr & 0x2000) == 0) {
+        try m.enterException(8, m.pc, 0, null); // Privilege violation
+        return 34;
+    }
+    const ext = i.extension_word orelse 0;
+    const is_addr = (ext & 0x8000) != 0;
+    const reg_num = @as(u3, @truncate((ext >> 12) & 7));
+    const direction = (ext >> 11) & 1; // 0 = EA→Rn, 1 = Rn→EA
+
+    if (direction == 0) {
+        // EA → Register (read from EA, write to register)
+        const val = try getOperandValue(m, i.src, i.data_size);
+        if (is_addr) {
+            m.a[reg_num] = if (i.data_size == .Byte) val else if (i.data_size == .Word) @as(u32, @bitCast(@as(i32, @as(i16, @bitCast(@as(u16, @truncate(val))))))) else val;
+        } else {
+            setRegisterValue(&m.d[reg_num], val, i.data_size);
+        }
+    } else {
+        // Register → EA (read from register, write to EA)
+        const val = if (is_addr) m.a[reg_num] else getRegisterValue(m.d[reg_num], i.data_size);
+        try setOperandValue(m, i.dst, val, i.data_size);
+    }
+
+    m.pc += i.size;
+    return 4;
 }
 fn executeCallm(m: *cpu.M68k, i: *const decoder.Instruction) !u32 {
     const arg_count: u16 = switch (i.src) {

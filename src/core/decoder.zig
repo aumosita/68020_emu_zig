@@ -90,6 +90,7 @@ pub const Mnemonic = enum {
     BFFFO,
     CAS,
     CAS2,
+    MOVES,
     PACK,
     UNPK,
     CHK2,
@@ -563,6 +564,24 @@ pub const Decoder = struct {
                 i.size = @truncate(cpc - pc);
                 return i;
             }
+        }
+        // MOVES: 0000 1110 szxx xxxx (sz=bits 7-6, not CAS mode=110)
+        if ((o & 0xFE00) == 0x0E00 and (o & 0x00C0) != 0x00C0) {
+            const sz = @as(u2, @truncate((o >> 6) & 3));
+            const ext = rw(cpc);
+            cpc += 2;
+            i.mnemonic = .MOVES;
+            i.data_size = switch (sz) {
+                0 => .Byte,
+                1 => .Word,
+                2 => .Long,
+                else => .Byte,
+            };
+            i.extension_word = ext;
+            i.src = try self.decodeEA(@truncate((o >> 3) & 7), @truncate(o & 7), &cpc, rw, i.data_size);
+            i.dst = i.src; // Both src and dst point to EA; direction is in extension word
+            i.size = @truncate(cpc - pc);
+            return i;
         }
         if ((o & 0xF1C0) == 0x0100 or (o & 0xF1C0) == 0x0140 or (o & 0xF1C0) == 0x0180 or (o & 0xF1C0) == 0x01C0) {
             const bo = (o >> 6) & 3;
