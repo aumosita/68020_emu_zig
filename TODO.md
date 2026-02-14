@@ -78,23 +78,21 @@
     - `zig build test-all` 통합 러너 구축 및 결과 리포트(JSON/HTML) 생성.
 
 ### 코드 품질 및 리팩토링
-- [ ] **executor.zig 모듈 분리** (현재 2,075줄)
-    - 산술 명령어 (`executor_arithmetic.zig`)
-    - 논리 명령어 (`executor_logical.zig`)
-    - 분기 명령어 (`executor_branch.zig`)
-    - 시스템 명령어 (`executor_system.zig`)
-    - 목표: 각 모듈 500줄 이하 유지
-- [ ] **cpu_test.zig 분할** (현재 2,925줄, 95개 테스트)
-    - Helper 함수 분리 → `tests/core/cpu_test_helpers.zig`
-    - 카테고리별 분리:
-      - `cpu_test_init.zig` - 초기화 및 리셋
-      - `cpu_test_cache.zig` - 캐시 및 파이프라인
-      - `cpu_test_exceptions.zig` - 예외 처리
-      - `cpu_test_interrupts.zig` - 인터럽트
-      - `cpu_test_stack.zig` - 스택 포인터 뱅킹
-      - `cpu_test_special.zig` - 특수 명령어 (MOVEC, BCD)
-      - `cpu_test_hooks.zig` - 콜백 (coprocessor, bus hook)
-    - 목표: 각 파일 400줄 이하 유지
+- [x] **메모리 할당 최적화 분석** ✅ (완료 2026-02-14)
+    - 현재 할당 패턴 분석 완료
+    - Arena allocator 도입 시 이득 분석
+    - 결론: 초기화 시 한 번만 할당되므로 우선순위 낮음
+    - 문서: `docs/MEMORY_ALLOCATION_ANALYSIS.md`
+    - 향후 재검토 조건: 멀티 인스턴스, JIT 도입 시
+- [ ] **executor.zig 모듈 분리** (현재 2,075줄) [보류]
+    - 현황: 단일 switch 문으로 100+ 명령어 처리
+    - 과제: 분리 시 인터페이스 설계 및 전체 테스트 필요
+    - 대안: 명령어 추가/수정 시 점진적 리팩토링
+    - 우선순위: 낮음 (현재 구조로 유지보수 가능)
+- [ ] **cpu_test.zig 분할** (현재 2,925줄, 95개 테스트) [보류]
+    - 과제: 테스트 간 의존성 및 helper 함수 공유
+    - 대안: 새로운 테스트는 별도 파일로 작성
+    - 우선순위: 낮음 (테스트 통과율 100% 유지 중)
 
 ### Quick Wins ✅ (완료 2026-02-14)
 - [x] `.editorconfig` 추가 (코딩 스타일 통일)
